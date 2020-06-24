@@ -5,7 +5,7 @@ import Control.Alt ((<|>))
 import Control.Monad.Except (Except, runExceptT, throwError)
 import Control.Monad.Reader (ReaderT, ask, lift, runReaderT)
 import Control.Monad.State (StateT, evalStateT, get, put)
-import Control.Monad.Writer (WriterT, execWriterT, tell, censor)
+import Control.Monad.Writer (WriterT, execWriterT, tell)
 import Data.Array as A
 import Data.Either (Either, either)
 import Data.Foldable (foldl)
@@ -57,6 +57,11 @@ type ValStack
 oooook ∷ ValStack
 oooook = lift $ pure unit
 
+not'oooook ∷ List (Tuple (List String) String) → ValStack
+not'oooook l = do
+  tell l
+  lift $ pure unit
+
 taddle ∷ String → ValStack
 taddle msg = do
   whereWeAre ← get
@@ -70,7 +75,7 @@ dive segment = do
   oooook
 
 -- if both go to shit, we want to have the errors for both
-altalt :: ValStack -> ValStack -> ValStack
+altalt ∷ ValStack → ValStack → ValStack
 altalt a b = do
   whereWeAre ← get
   env ← ask
@@ -82,12 +87,12 @@ altalt a b = do
     ( let
         _b = unwrap (runReaderT (execWriterT (evalStateT b whereWeAre)) env)
       in
-        if length _b == 0 then oooook else censor (\w -> _a <> _b) oooook
+        if length _b == 0 then oooook else not'oooook $ _a <> _b
     )
 
 infixl 3 altalt as <:>
 
-plusplus :: ValStack -> ValStack -> ValStack
+plusplus ∷ ValStack → ValStack → ValStack
 plusplus a b = do
   whereWeAre ← get
   env ← ask
@@ -95,7 +100,7 @@ plusplus a b = do
     _a = unwrap (runReaderT (execWriterT (evalStateT a whereWeAre)) env)
   let
     _b = unwrap (runReaderT (execWriterT (evalStateT b whereWeAre)) env)
-  if length _b == 0 && length _a == 0 then oooook else censor (\_ -> _a <> _b) oooook
+  if length _b == 0 && length _a == 0 then oooook else not'oooook $ _a <> _b
 
 infixl 3 plusplus as <+>
 
@@ -308,14 +313,14 @@ validateFieldDefinitionsAgainstJSONObject (JObject (JMap j)) fd =
     (<+>)
     oooook
     ( map
-        ( \kv ->
+        ( \kv →
             foldl
               (<:>)
               (taddle $ "Could not find a match for kv pair: " <> show kv <> "\n")
               ( map (validateKVPairAgainstFieldDefinition kv) fd
               )
         )
-        ((Map.toUnfoldable j) :: (List (Tuple String JSON)))
+        ((Map.toUnfoldable j) ∷ (List (Tuple String JSON)))
     )
 
 validateFieldDefinitionsAgainstJSONObject _ fd = taddle "Cannot validate field definitions against anything other than an object"
