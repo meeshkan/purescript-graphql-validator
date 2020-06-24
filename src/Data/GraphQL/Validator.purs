@@ -2,7 +2,6 @@ module Data.GraphQL.Validator where
 
 import Prelude
 import Control.Alt ((<|>))
-import Data.Lazy (Lazy, defer, force)
 import Control.Monad.Except (Except, runExceptT, throwError)
 import Control.Monad.Reader (ReaderT, ask, lift, runReaderT)
 import Control.Monad.State (StateT, evalStateT, get, put)
@@ -18,6 +17,7 @@ import Data.GraphQL.AST as AST
 import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, lensToTypeDefinitions)
 import Data.GraphQL.Parser (document)
 import Data.Identity (Identity)
+import Data.Lazy (Lazy, defer, force)
 import Data.Lens as L
 import Data.List (List(..), singleton, (:), fromFoldable, length)
 import Data.List.NonEmpty (NonEmptyList, fromList)
@@ -71,7 +71,7 @@ dive segment = do
   oooook
 
 -- if both go to shit, we want to have the errors for both
-altalt :: ∀ a. Lazy (ValStack' a) -> Lazy (ValStack' a) -> ValStack' a
+altalt :: Lazy ValStack -> Lazy ValStack -> ValStack
 altalt a b = do
   whereWeAre ← get
   env ← ask
@@ -80,7 +80,7 @@ altalt a b = do
   let
     _a = unwrap (runReaderT (execWriterT (evalStateT a' whereWeAre)) env)
   if length _a == 0 then
-    a'
+    oooook
   else
     ( let
         b' = force b
@@ -88,12 +88,12 @@ altalt a b = do
         let
           _b = unwrap (runReaderT (execWriterT (evalStateT b' whereWeAre)) env)
         in
-          if length _b == 0 then b' else censor (\w -> _a <> w) b'
+          if length _b == 0 then b' else censor (\w -> _a <> _b) oooook
     )
 
 infixl 3 altalt as <:>
 
-plusplus :: ∀ a. ValStack' a -> ValStack' a -> ValStack' a
+plusplus :: ValStack -> ValStack -> ValStack
 plusplus a b = do
   whereWeAre ← get
   env ← ask
@@ -101,7 +101,7 @@ plusplus a b = do
     _a = unwrap (runReaderT (execWriterT (evalStateT a whereWeAre)) env)
   let
     _b = unwrap (runReaderT (execWriterT (evalStateT b whereWeAre)) env)
-  if length _b == 0 && length _a == 0 then b else censor (\w -> _a <> w) b
+  if length _b == 0 && length _a == 0 then b else censor (\_ -> _a <> _b) oooook
 
 infixl 3 plusplus as <+>
 
