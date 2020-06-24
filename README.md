@@ -1,4 +1,3 @@
-# purescript-graphql-gen
-
-Generates random graphql strings from an AST using quickcheck generators.
 # purescript-graphql-validator
+
+Validates graphql. One of many in the purescript ecosystem. Use at your own peril.
