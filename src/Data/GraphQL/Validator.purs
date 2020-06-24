@@ -95,7 +95,7 @@ plusplus a b = do
     _a = unwrap (runReaderT (execWriterT (evalStateT a whereWeAre)) env)
   let
     _b = unwrap (runReaderT (execWriterT (evalStateT b whereWeAre)) env)
-  if length _b == 0 && length _a == 0 then b else censor (\_ -> _a <> _b) oooook
+  if length _b == 0 && length _a == 0 then oooook else censor (\_ -> _a <> _b) oooook
 
 infixl 3 plusplus as <+>
 
