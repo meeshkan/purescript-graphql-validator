@@ -1,23 +1,27 @@
-module Data.GraphQL.Gen where
+module Data.GraphQL.Validator where
 
 import Prelude
 import Control.Alt ((<|>))
+import Control.Monad.Except (Except, throwError)
 import Control.Monad.Reader (ReaderT, ask, lift, runReaderT)
 import Control.Monad.State (StateT, evalStateT, get, put)
 import Control.Monad.Writer (WriterT, execWriterT, tell, censor)
 import Data.Array as A
-import Data.Either (Either)
+import Data.Either (Either, either)
 import Data.Foldable (fold)
 import Data.Generic.Rep (class Generic)
 import Data.Generic.Rep.Eq (genericEq)
 import Data.Generic.Rep.Show (genericShow)
+import Data.GraphQL.AST (Document(..))
 import Data.GraphQL.AST as AST
+import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, getAllSubscriptionDefinitions, lensToTypeDefinitions)
+import Data.GraphQL.Parser (document)
 import Data.Identity (Identity)
+import Data.Lens as L
 import Data.List (List(..), singleton, (:), fromFoldable, length)
-import Data.List.Types (NonEmptyList)
-import Data.Map as M
+import Data.List.NonEmpty (NonEmptyList, fromList)
 import Data.Map as Map
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), maybe)
 import Data.Newtype (unwrap)
 import Data.Nullable (Nullable, null)
 import Data.Traversable (sequence)
@@ -25,6 +29,7 @@ import Data.Tuple (Tuple(..))
 import Foreign (ForeignError, isNull, readArray, readBoolean, readNumber, readString)
 import Foreign.Object as FO
 import Simple.JSON (class ReadForeign, class WriteForeign, readImpl, readJSON, writeImpl)
+import Text.Parsing.Parser (runParser)
 
 type GraphQLEnv
   = { typeDefinitions ∷ List AST.TypeDefinition }
@@ -63,7 +68,7 @@ dive segment = do
   oooook
 
 -- if both go to shit, we want to have the errors for both
-altalt :: forall a. ValStack' a -> ValStack' a -> ValStack' a
+altalt :: ∀ a. ValStack' a -> ValStack' a -> ValStack' a
 altalt a b = do
   whereWeAre ← get
   env ← ask
@@ -81,7 +86,7 @@ altalt a b = do
 infixl 3 altalt as <:>
 
 newtype JMap
-  = JMap (M.Map String JSON)
+  = JMap (Map.Map String JSON)
 
 instance eqJMap ∷ Eq JMap where
   eq a b = genericEq a b
@@ -94,10 +99,10 @@ instance jmapShow ∷ Show JMap where
 instance readForeignJMap ∷ ReadForeign JMap where
   readImpl f = do
     v ← (readImpl f)
-    pure (JMap $ M.fromFoldable ((FO.toUnfoldable $ v) ∷ (Array (Tuple String JSON))))
+    pure (JMap $ Map.fromFoldable ((FO.toUnfoldable $ v) ∷ (Array (Tuple String JSON))))
 
 jMapToObject ∷ JMap → FO.Object JSON
-jMapToObject (JMap f) = FO.fromFoldable ((M.toUnfoldable f) ∷ (Array (Tuple String JSON)))
+jMapToObject (JMap f) = FO.fromFoldable ((Map.toUnfoldable f) ∷ (Array (Tuple String JSON)))
 
 instance writeForeignJMap ∷ WriteForeign JMap where
   writeImpl f = writeImpl (jMapToObject f)
@@ -277,9 +282,60 @@ validateFieldDefinitionsAgainstJSONObject (JObject (JMap j)) fd = void (sequence
 
 validateFieldDefinitionsAgainstJSONObject _ fd = taddle "Cannot validate field definitions against anything other than an object"
 
-decodeToMyJSON ∷ String → Either (NonEmptyList ForeignError) JSON
-decodeToMyJSON = readJSON
+decodeToJSON ∷ String → Either (NonEmptyList ForeignError) JSON
+decodeToJSON = readJSON
 
---validateJSONResposneAgainstSchema ∷ String → String → ValStack
---validateJSONResposneAgainstSchema = do
---  either
+validateJSONAgainstSchema' ∷ JSON → Document → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateJSONAgainstSchema' json doc =
+  maybe (pure unit) throwError
+    $ fromList
+        ( unwrap
+            ( runReaderT
+                ( execWriterT
+                    ( evalStateT
+                        ( validateFieldDefinitionsAgainstJSONObject
+                            json
+                            (getAllQueryDefinitions doc)
+                            <:> validateFieldDefinitionsAgainstJSONObject json (getAllMutationDefinitions doc)
+                        )
+                        Nil
+                    )
+                )
+                { typeDefinitions: (L.toListOf lensToTypeDefinitions doc) }
+            )
+        )
+
+topLevelError =
+  Tuple
+    (singleton "[Root level]")
+    "A graphql response must have a field called 'data' at the top level" ∷
+    Tuple (List String) String
+
+validateJSONAgainstSchema ∷ JSON → Document → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateJSONAgainstSchema (JObject (JMap m)) d =
+  maybe
+    (throwError $ pure topLevelError)
+    (flip validateJSONAgainstSchema' d)
+    (Map.lookup "data" m)
+
+validateJSONAgainstSchema _ _ = throwError $ pure topLevelError
+
+validateJSONAsStringAgainstSchema ∷ String → Document → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateJSONAsStringAgainstSchema s d =
+  either
+    (throwError <<< pure <<< Tuple (singleton "[JSON parser]") <<< show)
+    (flip validateJSONAgainstSchema d)
+    (decodeToJSON s)
+
+validate_x_againstSchemaAsString ∷ ∀ x. (x → Document → Except (NonEmptyList (Tuple (List String) String)) Unit) → x → String → Except (NonEmptyList (Tuple (List String) String)) Unit
+validate_x_againstSchemaAsString x s d =
+  either
+    (throwError <<< pure <<< Tuple (singleton "[Schema parser]") <<< show)
+    (x s)
+    (runParser d document)
+
+validateJSONAgainstSchemaAsString ∷ JSON → String → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateJSONAgainstSchemaAsString = validate_x_againstSchemaAsString validateJSONAgainstSchema
+
+validateJSONStringAgainstSchemaAsString ∷ String → String → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateJSONStringAgainstSchemaAsString = validate_x_againstSchemaAsString validateJSONAsStringAgainstSchema
