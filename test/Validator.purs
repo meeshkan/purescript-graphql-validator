@@ -83,3 +83,5 @@ testValidator =
       liftEffect (validateJSONStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_name\":\"Smutz\",\"tweets\":[{\"id\":\"42\"}],\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" schema `shouldReturn` unit)
     it "should fail on complex query" do
       liftEffect $ expectError (validateJSONStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":true}}}}" schema)
+    it "should fail on triple-nested query" do
+      liftEffect $ expectError (validateJSONStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_name\":\"Smutz\",\"tweets\":[{\"id\":42}],\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" schema)
