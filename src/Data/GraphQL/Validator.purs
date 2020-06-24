@@ -17,7 +17,6 @@ import Data.GraphQL.AST as AST
 import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, lensToTypeDefinitions)
 import Data.GraphQL.Parser (document)
 import Data.Identity (Identity)
-import Data.Lazy (Lazy, defer, force)
 import Data.Lens as L
 import Data.List (List(..), singleton, (:), fromFoldable, length)
 import Data.List.NonEmpty (NonEmptyList, fromList)
@@ -71,24 +70,19 @@ dive segment = do
   oooook
 
 -- if both go to shit, we want to have the errors for both
-altalt :: Lazy ValStack -> Lazy ValStack -> ValStack
+altalt :: ValStack -> ValStack -> ValStack
 altalt a b = do
   whereWeAre ← get
   env ← ask
   let
-    a' = force a
-  let
-    _a = unwrap (runReaderT (execWriterT (evalStateT a' whereWeAre)) env)
+    _a = unwrap (runReaderT (execWriterT (evalStateT a whereWeAre)) env)
   if length _a == 0 then
     oooook
   else
     ( let
-        b' = force b
+        _b = unwrap (runReaderT (execWriterT (evalStateT b whereWeAre)) env)
       in
-        let
-          _b = unwrap (runReaderT (execWriterT (evalStateT b' whereWeAre)) env)
-        in
-          if length _b == 0 then b' else censor (\w -> _a <> _b) oooook
+        if length _b == 0 then oooook else censor (\w -> _a <> _b) oooook
     )
 
 infixl 3 altalt as <:>
@@ -217,12 +211,10 @@ validateAsObjectAgainstUnionDefinition ∷ Map.Map String JSON → List AST.Name
 validateAsObjectAgainstUnionDefinition m Nil = taddle $ "Validated " <> show m <> " against a union definition, but couldn't find a valid type to match against"
 
 validateAsObjectAgainstUnionDefinition m (x : xs) =
-  ( defer \_ →
-      validateValueAgainstType
-        (JObject (JMap m))
-        (AST.Type_NamedType x)
-  )
-    <:> (defer \_ → validateAsObjectAgainstUnionDefinition m xs)
+  validateValueAgainstType
+    (JObject (JMap m))
+    (AST.Type_NamedType x)
+    <:> validateAsObjectAgainstUnionDefinition m xs
 
 validateAsObjectAgainstInterfaceOrObjectDefinition ∷ Map.Map String JSON → List AST.FieldDefinition → ValStack
 validateAsObjectAgainstInterfaceOrObjectDefinition m id = validateFieldDefinitionsAgainstJSONObject (JObject (JMap m)) (map unwrap id)
@@ -230,11 +222,17 @@ validateAsObjectAgainstInterfaceOrObjectDefinition m id = validateFieldDefinitio
 validateAsObjectFromTDs ∷ Map.Map String JSON → List AST.TypeDefinition → ValStack
 validateAsObjectFromTDs m Nil = taddle "Incoming type is an object, but no type corresponds to it"
 
-validateAsObjectFromTDs m ((AST.TypeDefinition_UnionTypeDefinition (AST.UnionTypeDefinition ({ unionMemberTypes: Just (AST.UnionMemberTypes x) }))) : xs) = (defer \_ → validateAsObjectAgainstUnionDefinition m x) <:> (defer \_ → validateAsObjectFromTDs m xs)
+validateAsObjectFromTDs m ((AST.TypeDefinition_UnionTypeDefinition (AST.UnionTypeDefinition ({ unionMemberTypes: Just (AST.UnionMemberTypes x) }))) : xs) =
+  validateAsObjectAgainstUnionDefinition m x
+    <:> validateAsObjectFromTDs m xs
 
-validateAsObjectFromTDs m ((AST.TypeDefinition_InterfaceTypeDefinition (AST.InterfaceTypeDefinition ({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) = (defer \_ → validateAsObjectAgainstInterfaceOrObjectDefinition m x) <:> (defer \_ → validateAsObjectFromTDs m xs)
+validateAsObjectFromTDs m ((AST.TypeDefinition_InterfaceTypeDefinition (AST.InterfaceTypeDefinition ({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) =
+  validateAsObjectAgainstInterfaceOrObjectDefinition m x
+    <:> validateAsObjectFromTDs m xs
 
-validateAsObjectFromTDs m ((AST.TypeDefinition_ObjectTypeDefinition (AST.ObjectTypeDefinition ({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) = (defer \_ → validateAsObjectAgainstInterfaceOrObjectDefinition m x) <:> (defer \_ → validateAsObjectFromTDs m xs)
+validateAsObjectFromTDs m ((AST.TypeDefinition_ObjectTypeDefinition (AST.ObjectTypeDefinition ({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) =
+  validateAsObjectAgainstInterfaceOrObjectDefinition m x
+    <:> validateAsObjectFromTDs m xs
 
 validateAsObjectFromTDs m (_ : xs) = validateAsObjectFromTDs m xs
 
@@ -264,13 +262,17 @@ validateValueAgainstType (JString _) (AST.Type_NamedType (AST.NamedType "String"
 
 validateValueAgainstType (JString _) (AST.Type_NamedType (AST.NamedType "ID")) = oooook
 
-validateValueAgainstType (JString s) (AST.Type_NamedType (AST.NamedType nt)) = (defer \_ → validateAsEnum s nt) <:> (defer \_ → validateAsScalar s nt)
+validateValueAgainstType (JString s) (AST.Type_NamedType (AST.NamedType nt)) =
+  validateAsEnum s nt
+    <:> validateAsScalar s nt
 
 validateValueAgainstType (JString _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "String"))) = oooook
 
 validateValueAgainstType (JString _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "ID"))) = oooook
 
-validateValueAgainstType (JString s) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType nt))) = (defer \_ → validateAsEnum s nt) <:> (defer \_ → validateAsScalar s nt)
+validateValueAgainstType (JString s) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType nt))) =
+  validateAsEnum s nt
+    <:> validateAsScalar s nt
 
 validateValueAgainstType (JString _) t = taddle $ "Got a string but type is " <> show t
 
@@ -300,17 +302,19 @@ validateKVPairAgainstFieldDefinition (Tuple k v) fd =
         validateValueAgainstType v fd.type
     )
 
-validateKVPairAgainstFieldDefinitions ∷ Tuple String JSON → List AST.T_FieldDefinition → ValStack
-validateKVPairAgainstFieldDefinitions kv Nil = (taddle $ "Could not find a match for kv pair: " <> show kv <> "\n")
-
-validateKVPairAgainstFieldDefinitions kv (x : xs) = (defer \_ → validateKVPairAgainstFieldDefinition kv x) <:> (defer \_ → validateKVPairAgainstFieldDefinitions kv xs)
-
 validateFieldDefinitionsAgainstJSONObject ∷ JSON → List AST.T_FieldDefinition → ValStack
 validateFieldDefinitionsAgainstJSONObject (JObject (JMap j)) fd =
   foldl
     (<+>)
     oooook
-    ( map (flip validateKVPairAgainstFieldDefinitions fd)
+    ( map
+        ( \kv ->
+            foldl
+              (<:>)
+              (taddle $ "Could not find a match for kv pair: " <> show kv <> "\n")
+              ( map (validateKVPairAgainstFieldDefinition kv) fd
+              )
+        )
         ((Map.toUnfoldable j) :: (List (Tuple String JSON)))
     )
 
@@ -327,12 +331,10 @@ validateJSONAgainstSchema' json doc =
             ( runReaderT
                 ( execWriterT
                     ( evalStateT
-                        ( ( defer \_ →
-                              validateFieldDefinitionsAgainstJSONObject
-                                json
-                                (getAllQueryDefinitions doc)
-                          )
-                            <:> (defer \_ → validateFieldDefinitionsAgainstJSONObject json (getAllMutationDefinitions doc))
+                        ( validateFieldDefinitionsAgainstJSONObject
+                            json
+                            (getAllQueryDefinitions doc)
+                            <:> validateFieldDefinitionsAgainstJSONObject json (getAllMutationDefinitions doc)
                         )
                         Nil
                     )
