@@ -2,17 +2,19 @@ module Data.GraphQL.Gen where
 
 import Prelude
 import Control.Alt ((<|>))
-import Control.Monad.Reader (ReaderT, lift, ask)
-import Control.Monad.State (StateT, get, put)
-import Control.Monad.Writer (WriterT, tell)
+import Control.Monad.Reader (ReaderT, ask, lift, runReaderT)
+import Control.Monad.State (StateT, evalStateT, get, put)
+import Control.Monad.Writer (WriterT, execWriterT, tell, censor)
 import Data.Array as A
+import Data.Either (Either)
 import Data.Foldable (fold)
 import Data.Generic.Rep (class Generic)
 import Data.Generic.Rep.Eq (genericEq)
 import Data.Generic.Rep.Show (genericShow)
 import Data.GraphQL.AST as AST
 import Data.Identity (Identity)
-import Data.List (List(..), singleton, (:), fromFoldable)
+import Data.List (List(..), singleton, (:), fromFoldable, length)
+import Data.List.Types (NonEmptyList)
 import Data.Map as M
 import Data.Map as Map
 import Data.Maybe (Maybe(..))
@@ -20,9 +22,9 @@ import Data.Newtype (unwrap)
 import Data.Nullable (Nullable, null)
 import Data.Traversable (sequence)
 import Data.Tuple (Tuple(..))
-import Foreign (isNull, readArray, readBoolean, readNumber, readString)
+import Foreign (ForeignError, isNull, readArray, readBoolean, readNumber, readString)
 import Foreign.Object as FO
-import Simple.JSON (class ReadForeign, class WriteForeign, readImpl, writeImpl)
+import Simple.JSON (class ReadForeign, class WriteForeign, readImpl, readJSON, writeImpl)
 
 type GraphQLEnv
   = { typeDefinitions ∷ List AST.TypeDefinition }
@@ -60,15 +62,33 @@ dive segment = do
   put $ whereWeAre <> (singleton segment)
   oooook
 
+-- if both go to shit, we want to have the errors for both
+altalt :: forall a. ValStack' a -> ValStack' a -> ValStack' a
+altalt a b = do
+  whereWeAre ← get
+  env ← ask
+  let
+    _a = unwrap (runReaderT (execWriterT (evalStateT a whereWeAre)) env)
+  if length _a == 0 then
+    a
+  else
+    ( let
+        _b = unwrap (runReaderT (execWriterT (evalStateT a whereWeAre)) env)
+      in
+        if length _b == 0 then b else censor (\w -> _a <> w) b
+    )
+
+infixl 3 altalt as <:>
+
 newtype JMap
   = JMap (M.Map String JSON)
 
-instance eqJMap :: Eq JMap where
+instance eqJMap ∷ Eq JMap where
   eq a b = genericEq a b
 
-derive instance genericJMap :: Generic JMap _
+derive instance genericJMap ∷ Generic JMap _
 
-instance jmapShow :: Show JMap where
+instance jmapShow ∷ Show JMap where
   show s = genericShow s
 
 instance readForeignJMap ∷ ReadForeign JMap where
@@ -76,7 +96,7 @@ instance readForeignJMap ∷ ReadForeign JMap where
     v ← (readImpl f)
     pure (JMap $ M.fromFoldable ((FO.toUnfoldable $ v) ∷ (Array (Tuple String JSON))))
 
-jMapToObject ∷ JMap -> FO.Object JSON
+jMapToObject ∷ JMap → FO.Object JSON
 jMapToObject (JMap f) = FO.fromFoldable ((M.toUnfoldable f) ∷ (Array (Tuple String JSON)))
 
 instance writeForeignJMap ∷ WriteForeign JMap where
@@ -90,12 +110,12 @@ data JSON
   | JNumber Number
   | JNull
 
-derive instance genericJSON :: Generic JSON _
+derive instance genericJSON ∷ Generic JSON _
 
-instance jsonShow :: Show JSON where
+instance jsonShow ∷ Show JSON where
   show s = genericShow s
 
-instance readForeignJSON :: ReadForeign JSON where
+instance readForeignJSON ∷ ReadForeign JSON where
   readImpl f =
     if (isNull f) then
       pure JNull
@@ -106,15 +126,15 @@ instance readForeignJSON :: ReadForeign JSON where
         <|> (JArray <$> (readArray f >>= sequence <<< map readImpl <<< fromFoldable))
         <|> (JObject <$> readImpl f)
 
-instance writeForeignJSON :: WriteForeign JSON where
+instance writeForeignJSON ∷ WriteForeign JSON where
   writeImpl (JObject j) = writeImpl $ jMapToObject j
   writeImpl (JArray j) = writeImpl (A.fromFoldable j)
   writeImpl (JBoolean j) = writeImpl j
   writeImpl (JNumber j) = writeImpl j
   writeImpl (JString j) = writeImpl j
-  writeImpl JNull = writeImpl (null :: Nullable Int) -- chose Int at random
+  writeImpl JNull = writeImpl (null ∷ Nullable Int) -- chose Int at random
 
-instance eqJSON :: Eq JSON where
+instance eqJSON ∷ Eq JSON where
   eq a b = genericEq a b
 
 isInEnumValuesDefinition ∷ String → List AST.EnumValueDefinition → Boolean
@@ -175,7 +195,7 @@ validateAsObjectAgainstUnionDefinition m (x : xs) =
   validateValueAgainstType
     (JObject (JMap m))
     (AST.Type_NamedType x)
-    <|> validateAsObjectAgainstUnionDefinition m xs
+    <:> validateAsObjectAgainstUnionDefinition m xs
 
 validateAsObjectAgainstInterfaceOrObjectDefinition ∷ Map.Map String JSON → List AST.FieldDefinition → ValStack
 validateAsObjectAgainstInterfaceOrObjectDefinition m id = validateFieldDefinitionsAgainstJSONObject (JObject (JMap m)) (map unwrap id)
@@ -183,11 +203,11 @@ validateAsObjectAgainstInterfaceOrObjectDefinition m id = validateFieldDefinitio
 validateAsObjectFromTDs ∷ Map.Map String JSON → List AST.TypeDefinition → ValStack
 validateAsObjectFromTDs m Nil = taddle "Incoming type is an object, but no type corresponds to it"
 
-validateAsObjectFromTDs m ((AST.TypeDefinition_UnionTypeDefinition (AST.UnionTypeDefinition ({ unionMemberTypes: Just (AST.UnionMemberTypes x) }))) : xs) = validateAsObjectAgainstUnionDefinition m x <|> validateAsObjectFromTDs m xs
+validateAsObjectFromTDs m ((AST.TypeDefinition_UnionTypeDefinition (AST.UnionTypeDefinition ({ unionMemberTypes: Just (AST.UnionMemberTypes x) }))) : xs) = validateAsObjectAgainstUnionDefinition m x <:> validateAsObjectFromTDs m xs
 
-validateAsObjectFromTDs m ((AST.TypeDefinition_InterfaceTypeDefinition (AST.InterfaceTypeDefinition ({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) = validateAsObjectAgainstInterfaceOrObjectDefinition m x <|> validateAsObjectFromTDs m xs
+validateAsObjectFromTDs m ((AST.TypeDefinition_InterfaceTypeDefinition (AST.InterfaceTypeDefinition ({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) = validateAsObjectAgainstInterfaceOrObjectDefinition m x <:> validateAsObjectFromTDs m xs
 
-validateAsObjectFromTDs m ((AST.TypeDefinition_ObjectTypeDefinition (AST.ObjectTypeDefinition ({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) = validateAsObjectAgainstInterfaceOrObjectDefinition m x <|> validateAsObjectFromTDs m xs
+validateAsObjectFromTDs m ((AST.TypeDefinition_ObjectTypeDefinition (AST.ObjectTypeDefinition ({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) = validateAsObjectAgainstInterfaceOrObjectDefinition m x <:> validateAsObjectFromTDs m xs
 
 validateAsObjectFromTDs m (_ : xs) = validateAsObjectFromTDs m xs
 
@@ -215,11 +235,11 @@ validateValueAgainstType (JNumber _) t = taddle $ "Got a number but type is " <>
 
 validateValueAgainstType (JString _) (AST.Type_NamedType (AST.NamedType "String")) = oooook
 
-validateValueAgainstType (JString s) (AST.Type_NamedType (AST.NamedType nt)) = validateAsEnum s nt <|> validateAsScalar s nt
+validateValueAgainstType (JString s) (AST.Type_NamedType (AST.NamedType nt)) = validateAsEnum s nt <:> validateAsScalar s nt
 
 validateValueAgainstType (JString _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "String"))) = oooook
 
-validateValueAgainstType (JString s) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType nt))) = validateAsEnum s nt <|> validateAsScalar s nt
+validateValueAgainstType (JString s) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType nt))) = validateAsEnum s nt <:> validateAsScalar s nt
 
 validateValueAgainstType (JString _) t = taddle $ "Got a string but type is " <> show t
 
@@ -257,4 +277,9 @@ validateFieldDefinitionsAgainstJSONObject (JObject (JMap j)) fd = void (sequence
 
 validateFieldDefinitionsAgainstJSONObject _ fd = taddle "Cannot validate field definitions against anything other than an object"
 
+decodeToMyJSON ∷ String → Either (NonEmptyList ForeignError) JSON
+decodeToMyJSON = readJSON
+
 --validateJSONResposneAgainstSchema ∷ String → String → ValStack
+--validateJSONResposneAgainstSchema = do
+--  either
