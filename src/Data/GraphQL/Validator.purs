@@ -2,19 +2,19 @@ module Data.GraphQL.Validator where
 
 import Prelude
 import Control.Alt ((<|>))
-import Control.Monad.Except (Except, throwError)
+import Control.Monad.Except (Except, runExceptT, throwError)
 import Control.Monad.Reader (ReaderT, ask, lift, runReaderT)
 import Control.Monad.State (StateT, evalStateT, get, put)
 import Control.Monad.Writer (WriterT, execWriterT, tell, censor)
 import Data.Array as A
 import Data.Either (Either, either)
-import Data.Foldable (fold)
+import Data.Foldable (foldl)
 import Data.Generic.Rep (class Generic)
 import Data.Generic.Rep.Eq (genericEq)
 import Data.Generic.Rep.Show (genericShow)
-import Data.GraphQL.AST (Document(..))
+import Data.GraphQL.AST (Document)
 import Data.GraphQL.AST as AST
-import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, getAllSubscriptionDefinitions, lensToTypeDefinitions)
+import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, lensToTypeDefinitions)
 import Data.GraphQL.Parser (document)
 import Data.Identity (Identity)
 import Data.Lens as L
@@ -26,6 +26,8 @@ import Data.Newtype (unwrap)
 import Data.Nullable (Nullable, null)
 import Data.Traversable (sequence)
 import Data.Tuple (Tuple(..))
+import Effect (Effect)
+import Effect.Exception (error)
 import Foreign (ForeignError, isNull, readArray, readBoolean, readNumber, readString)
 import Foreign.Object as FO
 import Simple.JSON (class ReadForeign, class WriteForeign, readImpl, readJSON, writeImpl)
@@ -78,12 +80,24 @@ altalt a b = do
     a
   else
     ( let
-        _b = unwrap (runReaderT (execWriterT (evalStateT a whereWeAre)) env)
+        _b = unwrap (runReaderT (execWriterT (evalStateT b whereWeAre)) env)
       in
         if length _b == 0 then b else censor (\w -> _a <> w) b
     )
 
 infixl 3 altalt as <:>
+
+plusplus :: ∀ a. ValStack' a -> ValStack' a -> ValStack' a
+plusplus a b = do
+  whereWeAre ← get
+  env ← ask
+  let
+    _a = unwrap (runReaderT (execWriterT (evalStateT a whereWeAre)) env)
+  let
+    _b = unwrap (runReaderT (execWriterT (evalStateT b whereWeAre)) env)
+  if length _b == 0 && length _a == 0 then b else censor (\w -> _a <> w) b
+
+infixl 3 plusplus as <+>
 
 newtype JMap
   = JMap (Map.Map String JSON)
@@ -240,9 +254,13 @@ validateValueAgainstType (JNumber _) t = taddle $ "Got a number but type is " <>
 
 validateValueAgainstType (JString _) (AST.Type_NamedType (AST.NamedType "String")) = oooook
 
+validateValueAgainstType (JString _) (AST.Type_NamedType (AST.NamedType "ID")) = oooook
+
 validateValueAgainstType (JString s) (AST.Type_NamedType (AST.NamedType nt)) = validateAsEnum s nt <:> validateAsScalar s nt
 
 validateValueAgainstType (JString _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "String"))) = oooook
+
+validateValueAgainstType (JString _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "ID"))) = oooook
 
 validateValueAgainstType (JString s) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType nt))) = validateAsEnum s nt <:> validateAsScalar s nt
 
@@ -274,11 +292,17 @@ validateKVPairAgainstFieldDefinition (Tuple k v) fd =
         validateValueAgainstType v fd.type
     )
 
-validateAllFieldDefs ∷ Map.Map String JSON → List AST.T_FieldDefinition → List (List ValStack)
-validateAllFieldDefs j fd = (map (\js → map (validateKVPairAgainstFieldDefinition js) fd) (Map.toUnfoldable j))
-
 validateFieldDefinitionsAgainstJSONObject ∷ JSON → List AST.T_FieldDefinition → ValStack
-validateFieldDefinitionsAgainstJSONObject (JObject (JMap j)) fd = void (sequence $ fold (validateAllFieldDefs j fd))
+validateFieldDefinitionsAgainstJSONObject (JObject (JMap j)) fd =
+  foldl
+    (<+>)
+    oooook
+    ( map
+        ( \js →
+            foldl (<:>) (taddle $ "Could not find a match for kv pair: " <> show js <> "\n") $ map (validateKVPairAgainstFieldDefinition js) fd
+        )
+        ((Map.toUnfoldable j) :: (List (Tuple String JSON)))
+    )
 
 validateFieldDefinitionsAgainstJSONObject _ fd = taddle "Cannot validate field definitions against anything other than an object"
 
@@ -339,3 +363,10 @@ validateJSONAgainstSchemaAsString = validate_x_againstSchemaAsString validateJSO
 
 validateJSONStringAgainstSchemaAsString ∷ String → String → Except (NonEmptyList (Tuple (List String) String)) Unit
 validateJSONStringAgainstSchemaAsString = validate_x_againstSchemaAsString validateJSONAsStringAgainstSchema
+
+validateJSONStringAgainstSchemaAsString' ∷ String → String → Effect Unit
+validateJSONStringAgainstSchemaAsString' a b =
+  either
+    (throwError <<< error <<< show)
+    pure
+    (unwrap $ runExceptT (validateJSONStringAgainstSchemaAsString a b))
