@@ -14,7 +14,7 @@ import Data.Generic.Rep.Show (genericShow)
 import Data.GraphQL.AST as AST
 import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, lensToTypeDefinitions)
 import Data.GraphQL.Parser (document)
-import Data.GraphQL.Validator.Util (GraphQLResEnv, ValStackRes, altalt', dive, validateAsEnum, validateAsScalar, oooook, plusplus', taddle, validationDoubleLoop)
+import Data.GraphQL.Validator.Util (GraphQLResEnv, ValStackRes, altalt', dive, oooook, plusplus', taddle, topLevelError, validateAsEnum, validateAsScalar, validationDoubleLoop)
 import Data.Lens as L
 import Data.List (List(..), fromFoldable, singleton, (:))
 import Data.List.NonEmpty (NonEmptyList, fromList)
@@ -229,12 +229,6 @@ validateJSONAgainstSchema' json doc =
             { typeDefinitions: (L.toListOf lensToTypeDefinitions doc) }
             Nil
         )
-
-topLevelError =
-  Tuple
-    (singleton "[Root level]")
-    "A graphql response must have a field called 'data' at the top level" ∷
-    Tuple (List String) String
 
 validateJSONAgainstSchema ∷ JSON → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
 validateJSONAgainstSchema (JObject (JMap m)) d =

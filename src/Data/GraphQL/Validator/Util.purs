@@ -185,3 +185,9 @@ validationDoubleLoop pp aa f l0 l1 =
         )
         l0
     )
+
+topLevelError =
+  Tuple
+    (singleton "[Root level]")
+    "A graphql response must have a field called 'data' at the top level" ∷
+    Tuple (List String) String

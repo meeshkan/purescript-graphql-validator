@@ -1,22 +1,27 @@
 module Data.GraphQL.RequestValidator where
 
 import Prelude
-import Control.Monad.Except (Except, throwError)
+import Control.Monad.Except (Except, runExceptT, throwError)
 import Control.Monad.Reader (ask, runReaderT)
 import Control.Monad.State (evalStateT)
 import Control.Monad.Writer (execWriterT)
+import Data.Either (Either, either)
 import Data.GraphQL.AST as AST
 import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, getAllSubscriptionDefinitions, lensToFragmentDefinitions, lensToTypeDefinitions)
+import Data.GraphQL.Parser as GP
 import Data.GraphQL.Validator.Util (GraphQLReqEnv, ValStackReq, altalt', dive, oooook, plusplus', taddle, validateAsEnum, validateAsScalar, validationDoubleLoop)
 import Data.Lens as L
-import Data.List (List(..), length, filter, (:), head)
+import Data.List (List(..), singleton, length, filter, (:), head)
 import Data.List.NonEmpty (fromList)
 import Data.List.Types (NonEmptyList)
 import Data.Maybe (maybe, Maybe(..))
 import Data.Newtype (unwrap)
 import Data.Set (fromFoldable, empty, difference)
 import Data.Traversable (sequence)
-import Data.Tuple (Tuple)
+import Data.Tuple (Tuple(..))
+import Effect (Effect)
+import Effect.Exception (error)
+import Text.Parsing.Parser (ParseError, runParser)
 
 uw ∷ ValStackReq → GraphQLReqEnv → (List String) → List (Tuple (List String) String)
 uw a env s = unwrap (runReaderT (execWriterT (evalStateT a s)) env)
@@ -54,7 +59,7 @@ validateValueAgainstType (AST.Value_NullValue _) (AST.Type_ListType _) = oooook
 
 validateValueAgainstType (AST.Value_NullValue _) (AST.Type_NamedType _) = oooook
 
-validateValueAgainstType (AST.Value_NullValue _) (AST.Type_NonNullType _) = taddle "Type is non-null in definition but null in JSON"
+validateValueAgainstType (AST.Value_NullValue _) (AST.Type_NonNullType _) = taddle "Type is non-null in definition but null in field"
 
 validateValueAgainstType (AST.Value_IntValue _) (AST.Type_NamedType (AST.NamedType "Int")) = oooook
 
@@ -258,10 +263,10 @@ validateSelectionSetAgainstFieldDefinitions (AST.SelectionSet ss) fd =
     ss
     fd
 
-validateExecutableDefinitionAgainstSchema ∷ AST.OperationDefinition → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
-validateExecutableDefinitionAgainstSchema (AST.OperationDefinition_SelectionSet ss) doc = validateExecutableDefinitionAgainstSchema (AST.OperationDefinition_OperationType { operationType: AST.Query, name: Nothing, variableDefinitions: Nothing, directives: Nothing, selectionSet: ss }) doc
+validateOperationDefinitionAgainstSchema ∷ AST.OperationDefinition → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateOperationDefinitionAgainstSchema (AST.OperationDefinition_SelectionSet ss) doc = validateOperationDefinitionAgainstSchema (AST.OperationDefinition_OperationType { operationType: AST.Query, name: Nothing, variableDefinitions: Nothing, directives: Nothing, selectionSet: ss }) doc
 
-validateExecutableDefinitionAgainstSchema (AST.OperationDefinition_OperationType ot) doc =
+validateOperationDefinitionAgainstSchema (AST.OperationDefinition_OperationType ot) doc =
   maybe (pure unit) throwError
     $ fromList
         ( uw
@@ -275,3 +280,33 @@ validateExecutableDefinitionAgainstSchema (AST.OperationDefinition_OperationType
             { typeDefinitions: (L.toListOf lensToTypeDefinitions doc), fragmentDefinitions: (L.toListOf lensToFragmentDefinitions doc) }
             Nil
         )
+
+decodeToOperationDefinition ∷ String → Either ParseError AST.OperationDefinition
+decodeToOperationDefinition s = runParser s GP.operationDefinition
+
+validateOperationDefinitionAsStringAgainstSchema ∷ String → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateOperationDefinitionAsStringAgainstSchema s d =
+  either
+    (throwError <<< pure <<< Tuple (singleton "[OperationDefinition parser]") <<< show)
+    (flip validateOperationDefinitionAgainstSchema d)
+    (decodeToOperationDefinition s)
+
+validate_x_againstSchemaAsString ∷ ∀ x. (x → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit) → x → String → Except (NonEmptyList (Tuple (List String) String)) Unit
+validate_x_againstSchemaAsString x s d =
+  either
+    (throwError <<< pure <<< Tuple (singleton "[Schema parser]") <<< show)
+    (x s)
+    (runParser d GP.document)
+
+validateOperationDefinitionAgainstSchemaAsString ∷ AST.OperationDefinition → String → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateOperationDefinitionAgainstSchemaAsString = validate_x_againstSchemaAsString validateOperationDefinitionAgainstSchema
+
+validateOperationDefinitionStringAgainstSchemaAsString ∷ String → String → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateOperationDefinitionStringAgainstSchemaAsString = validate_x_againstSchemaAsString validateOperationDefinitionAsStringAgainstSchema
+
+validateOperationDefinitionStringAgainstSchemaAsString' ∷ String → String → Effect Unit
+validateOperationDefinitionStringAgainstSchemaAsString' a b =
+  either
+    (throwError <<< error <<< show)
+    pure
+    (unwrap $ runExceptT (validateOperationDefinitionStringAgainstSchemaAsString a b))
