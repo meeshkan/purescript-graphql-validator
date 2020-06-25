@@ -1,14 +1,12 @@
 module Data.GraphQL.Lens where
 
 import Prelude
-import Control.Monad.Free (wrap)
 import Data.GraphQL.AST as AST
 import Data.Lens (class Wander)
 import Data.Lens as L
 import Data.Lens.Record as LR
 import Data.List (List, length, concat)
 import Data.Maybe (Maybe)
-import Data.Newtype (unwrap)
 import Data.Profunctor.Choice (class Choice)
 import Data.Symbol (SProxy(..))
 import Data.Tuple (Tuple, uncurry)
@@ -65,7 +63,7 @@ lensToNamedRootOperationTypeDefinitions operationType =
     <<< L.filtered (eq operationType <<< _.operationType)
 
 getOperationTypeDefinitionType ∷ AST.T_OperationTypeDefinition -> String
-getOperationTypeDefinitionType = L.view (LR.prop (SProxy ∷ SProxy "namedType") <<< L.iso unwrap wrap)
+getOperationTypeDefinitionType = L.view (LR.prop (SProxy ∷ SProxy "namedType") <<< L.iso (\(AST.NamedType s) -> s) \s -> AST.NamedType s)
 
 getAllDefinitions ∷ String → AST.OperationType → AST.Document → List AST.T_FieldDefinition
 getAllDefinitions s o d =
