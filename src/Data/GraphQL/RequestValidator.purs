@@ -1,142 +1,277 @@
 module Data.GraphQL.RequestValidator where
 
 import Prelude
-
 import Control.Monad.Except (Except, throwError)
-import Control.Monad.Reader (runReaderT)
+import Control.Monad.Reader (ask, runReaderT)
 import Control.Monad.State (evalStateT)
 import Control.Monad.Writer (execWriterT)
 import Data.GraphQL.AST as AST
-import Data.Foldable(foldl)
-import Data.GraphQL.Validator.Util (ValStack(..), (<:>), (<+>), oooook, taddle)
-import Data.List (List(..))
-import Data.List.Lazy.NonEmpty (fromList)
+import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, getAllSubscriptionDefinitions, lensToFragmentDefinitions, lensToTypeDefinitions)
+import Data.GraphQL.Validator.Util (GraphQLReqEnv, ValStackReq, altalt', dive, oooook, plusplus', taddle, validateAsEnum, validateAsScalar, validationDoubleLoop)
+import Data.Lens as L
+import Data.List (List(..), length, filter, (:), head)
+import Data.List.NonEmpty (fromList)
 import Data.List.Types (NonEmptyList)
 import Data.Maybe (maybe, Maybe(..))
-import Data.Lens as L
 import Data.Newtype (unwrap)
+import Data.Set (fromFoldable, empty, difference)
+import Data.Traversable (sequence)
 import Data.Tuple (Tuple)
-import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, getAllSubscriptionDefinitions, lensToTypeDefinitions)
 
+uw ∷ ValStackReq → GraphQLReqEnv → (List String) → List (Tuple (List String) String)
+uw a env s = unwrap (runReaderT (execWriterT (evalStateT a s)) env)
 
-{-
-OperationDefinition_SelectionSet
-{
-  foo
-  bar
-}
+altalt ∷ ValStackReq → ValStackReq → ValStackReq
+altalt = altalt' uw
 
-OperationDefinition_OperationType
-query (id:"a") {
-  foo
-  bar
-}
+plusplus ∷ ValStackReq → ValStackReq → ValStackReq
+plusplus = plusplus' uw
 
-data OperationDefinition
-  = OperationDefinition_SelectionSet SelectionSet
-  | OperationDefinition_OperationType T_OperationDefinition_OperationType
--}
--- loop 1: loop over selection sets
--- loop 2 (inner loop): loop over field definitions
--- n^2
+validateListValueAsListType ∷ List AST.Value → AST.Type → ValStackReq
+validateListValueAsListType l t = do
+  dive "*"
+  void $ sequence (map (flip validateValueAgainstType t) l)
 
-{-
-Selection
-    -> { argumentsDefinition :: Maybe ArgumentsDefinition
-       , description :: Maybe String
-       , directives :: Maybe Directives
-       , name :: String
-       , type :: Type
-       }
-       -> StateT (List String)
-            (WriterT (List (Tuple (List String) String))
-               (ReaderT
-                  { typeDefinitions :: List TypeDefinition
-                  }
-                  Identity
-               )
-            )
-            Unit-}
+validateAsObjectAgainstInputObjectDefinition ∷ List AST.Argument → List AST.InputValueDefinition → ValStackReq
+validateAsObjectAgainstInputObjectDefinition a ad = validateArgumentsAgainstArgumentsDefinition (Just (AST.Arguments a)) (Just (AST.ArgumentsDefinition ad))
 
-{-
-data Selection
-  = Selection_Field Field
-  | Selection_FragmentSpread FragmentSpread
-  | Selection_InlineFragment InlineFragment
--}
+validateAsInputObjectFromTDs ∷ List AST.Argument → List AST.TypeDefinition → ValStackReq
+validateAsInputObjectFromTDs m Nil = taddle "Incoming type is an object, but no type corresponds to it"
 
-validateSelectionAgainstFieldDefinition ∷ AST.Selection → AST.T_FieldDefinition → ValStack
-validateSelectionAgainstFieldDefinition (Selection_Field f) fd - ?hole
-validateSelectionAgainstFieldDefinition (Selection_FragmentSpread fs) fd - ?hole
-validateSelectionAgainstFieldDefinition (Selection_InlineFragment ilf) fd - ?hole
-{-
-validateSelectionAgainstFieldDefinition s fd = ?hole
-  if ( /= fd.name) then
-    taddle $ "Incorrect field name: expecting " <> fd.name <> " but received " <> k
+validateAsInputObjectFromTDs m ((AST.TypeDefinition_InputObjectTypeDefinition (AST.InputObjectTypeDefinition ({ inputFieldsDefinition: Just (AST.InputFieldsDefinition x) }))) : xs) = validateAsObjectAgainstInputObjectDefinition m x
+
+validateAsInputObjectFromTDs m (_ : xs) = validateAsInputObjectFromTDs m xs
+
+validateAsInputObject ∷ List AST.Argument → String → ValStackReq
+validateAsInputObject o nt = do
+  v ← ask
+  validateAsInputObjectFromTDs o v.typeDefinitions
+
+validateValueAgainstType ∷ AST.Value → AST.Type → ValStackReq
+validateValueAgainstType (AST.Value_Variable _) _ = oooook -- as a variable could be anything
+
+validateValueAgainstType (AST.Value_NullValue _) (AST.Type_ListType _) = oooook
+
+validateValueAgainstType (AST.Value_NullValue _) (AST.Type_NamedType _) = oooook
+
+validateValueAgainstType (AST.Value_NullValue _) (AST.Type_NonNullType _) = taddle "Type is non-null in definition but null in JSON"
+
+validateValueAgainstType (AST.Value_IntValue _) (AST.Type_NamedType (AST.NamedType "Int")) = oooook
+
+validateValueAgainstType (AST.Value_FloatValue _) (AST.Type_NamedType (AST.NamedType "Float")) = oooook
+
+validateValueAgainstType (AST.Value_IntValue _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "Int"))) = oooook
+
+validateValueAgainstType (AST.Value_FloatValue _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "Float"))) = oooook
+
+validateValueAgainstType (AST.Value_IntValue _) t = taddle $ "Got an int but type is " <> show t
+
+validateValueAgainstType (AST.Value_FloatValue _) t = taddle $ "Got a float but type is " <> show t
+
+validateValueAgainstType (AST.Value_StringValue _) (AST.Type_NamedType (AST.NamedType "String")) = oooook
+
+validateValueAgainstType (AST.Value_StringValue _) (AST.Type_NamedType (AST.NamedType "ID")) = oooook
+
+validateValueAgainstType (AST.Value_EnumValue (AST.EnumValue s)) (AST.Type_NamedType (AST.NamedType nt)) =
+  validateAsEnum s nt
+    `altalt`
+      validateAsScalar s nt
+
+validateValueAgainstType (AST.Value_StringValue _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "String"))) = oooook
+
+validateValueAgainstType (AST.Value_StringValue _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "ID"))) = oooook
+
+validateValueAgainstType (AST.Value_EnumValue (AST.EnumValue s)) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType nt))) =
+  validateAsEnum s nt
+    `altalt`
+      validateAsScalar s nt
+
+validateValueAgainstType (AST.Value_StringValue _) t = taddle $ "Got a string but type is " <> show t
+
+validateValueAgainstType (AST.Value_EnumValue _) t = taddle $ "Got a enum but type is " <> show t
+
+validateValueAgainstType (AST.Value_BooleanValue _) (AST.Type_NamedType (AST.NamedType "Boolean")) = oooook
+
+validateValueAgainstType (AST.Value_BooleanValue _) t = taddle $ "Got a boolean but type is " <> show t
+
+validateValueAgainstType (AST.Value_ListValue (AST.ListValue lv)) (AST.Type_ListType (AST.ListType t)) = validateListValueAsListType lv t
+
+validateValueAgainstType (AST.Value_ListValue (AST.ListValue lv)) (AST.Type_NonNullType (AST.NonNullType_ListType (AST.ListType t))) = validateListValueAsListType lv t
+
+validateValueAgainstType (AST.Value_ListValue _) t = taddle $ "Got an array but type is " <> show t
+
+validateValueAgainstType (AST.Value_ObjectValue (AST.ObjectValue ov)) (AST.Type_NamedType (AST.NamedType nt)) = validateAsInputObject ov nt
+
+validateValueAgainstType (AST.Value_ObjectValue (AST.ObjectValue ov)) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType nt))) = validateAsInputObject ov nt
+
+validateValueAgainstType (AST.Value_ObjectValue _) t = taddle $ "Got an object but type is " <> show t
+
+validateNameCorrespondsToSimpleType ∷ String → ValStackReq
+validateNameCorrespondsToSimpleType t = case t of
+  "Int" → oooook
+  "Float" → oooook
+  "ID" → oooook
+  "String" → oooook
+  "Boolean" → oooook
+  s →
+    validateAsEnum s t
+      `altalt`
+        validateAsScalar s t
+
+validateUnderlyingTypeIsNotObject ∷ AST.Type → ValStackReq
+validateUnderlyingTypeIsNotObject (AST.Type_NamedType (AST.NamedType t)) = validateNameCorrespondsToSimpleType t
+
+validateUnderlyingTypeIsNotObject (AST.Type_ListType (AST.ListType t)) = validateUnderlyingTypeIsNotObject t
+
+validateUnderlyingTypeIsNotObject (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType t))) = validateNameCorrespondsToSimpleType t
+
+validateUnderlyingTypeIsNotObject (AST.Type_NonNullType (AST.NonNullType_ListType (AST.ListType t))) = validateUnderlyingTypeIsNotObject t
+
+validateAsObjectAgainstUnionDefinition ∷ List AST.Selection → List AST.NamedType → ValStackReq
+validateAsObjectAgainstUnionDefinition ss Nil = taddle $ "Validated " <> show ss <> " against a union definition, but couldn't find a valid type to match against"
+
+validateAsObjectAgainstUnionDefinition ss ((AST.NamedType nt) : xs) =
+  validateSelectionSetAgainstStringType
+    (AST.SelectionSet ss)
+    nt
+    `altalt`
+      validateAsObjectAgainstUnionDefinition ss xs
+
+validateAsObjectAgainstInterfaceOrObjectDefinition ∷ List AST.Selection → List AST.FieldDefinition → ValStackReq
+validateAsObjectAgainstInterfaceOrObjectDefinition ss fd = validateSelectionSetAgainstFieldDefinitions (AST.SelectionSet ss) (map unwrap fd)
+
+validateAsObjectFromTDs ∷ String → List AST.Selection → List AST.TypeDefinition → ValStackReq
+validateAsObjectFromTDs n m Nil = taddle "Incoming type is an object, but no type corresponds to it"
+
+validateAsObjectFromTDs n m ((AST.TypeDefinition_UnionTypeDefinition (AST.UnionTypeDefinition td@({ unionMemberTypes: Just (AST.UnionMemberTypes x) }))) : xs) =
+  if (n == td.name) then
+    (validateAsObjectAgainstUnionDefinition m x)
+  else
+    (taddle $ "Name does not match")
+      `altalt`
+        validateAsObjectFromTDs n m xs
+
+validateAsObjectFromTDs n m ((AST.TypeDefinition_InterfaceTypeDefinition (AST.InterfaceTypeDefinition td@({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) =
+  if (n == td.name) then
+    (validateAsObjectAgainstInterfaceOrObjectDefinition m x)
+  else
+    (taddle $ "Name does not match")
+      `altalt`
+        validateAsObjectFromTDs n m xs
+
+validateAsObjectFromTDs n m ((AST.TypeDefinition_ObjectTypeDefinition (AST.ObjectTypeDefinition td@({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) =
+  if (n == td.name) then
+    (validateAsObjectAgainstInterfaceOrObjectDefinition m x)
+  else
+    (taddle $ "Name does not match")
+      `altalt`
+        validateAsObjectFromTDs n m xs
+
+validateAsObjectFromTDs n m (_ : xs) = validateAsObjectFromTDs n m xs
+
+validateSelectionSetAgainstStringType ∷ AST.SelectionSet → String → ValStackReq
+validateSelectionSetAgainstStringType (AST.SelectionSet ss) tn = do
+  v ← ask
+  validateAsObjectFromTDs tn ss v.typeDefinitions
+
+validateFieldAgainstType ∷ AST.T_Field → AST.Type → ValStackReq
+validateFieldAgainstType { selectionSet: Nothing } t = validateUnderlyingTypeIsNotObject t
+
+validateFieldAgainstType { selectionSet: (Just s) } (AST.Type_NamedType (AST.NamedType nt)) = validateSelectionSetAgainstStringType s nt
+
+validateFieldAgainstType f@{ selectionSet: (Just s) } (AST.Type_ListType (AST.ListType t)) = validateFieldAgainstType f t
+
+validateFieldAgainstType { selectionSet: (Just s) } (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType nt))) = validateSelectionSetAgainstStringType s nt
+
+validateFieldAgainstType f@{ selectionSet: (Just s) } (AST.Type_NonNullType (AST.NonNullType_ListType (AST.ListType t))) = validateFieldAgainstType f t
+
+isArgumentNonNull ∷ AST.InputValueDefinition → Boolean
+isArgumentNonNull (AST.InputValueDefinition { type: (AST.Type_NonNullType _) }) = true
+
+isArgumentNonNull _ = false
+
+getAllNonNullArguments ∷ List AST.InputValueDefinition → List AST.InputValueDefinition
+getAllNonNullArguments = filter isArgumentNonNull
+
+validateArgumentAgainstArgumentDefinition ∷ AST.Argument → AST.InputValueDefinition → ValStackReq
+validateArgumentAgainstArgumentDefinition (AST.Argument a) (AST.InputValueDefinition ivd) =
+  if a.name /= ivd.name then
+    taddle $ "Argument names do not match"
+  else do
+    dive a.name
+    validateValueAgainstType a.value ivd.type
+
+validateArgumentsAgainstArgumentsDefinition ∷ Maybe AST.Arguments → Maybe AST.ArgumentsDefinition → ValStackReq
+validateArgumentsAgainstArgumentsDefinition Nothing Nothing = oooook
+
+validateArgumentsAgainstArgumentsDefinition (Just _) Nothing = taddle $ "Providing arguments to a field that takes no arguments"
+
+validateArgumentsAgainstArgumentsDefinition Nothing (Just (AST.ArgumentsDefinition ad)) =
+  if (length (getAllNonNullArguments ad) == 0) then
+    oooook
+  else
+    (taddle $ "Did not supply arguments, but there are non-null arguments in the field definition.")
+
+validateArgumentsAgainstArgumentsDefinition (Just (AST.Arguments a)) (Just (AST.ArgumentsDefinition ad)) =
+  let
+    diff =
+      difference
+        (fromFoldable $ map (_.name <<< unwrap) (getAllNonNullArguments ad))
+        (fromFoldable $ map (_.name <<< unwrap) a)
+  in
+    if diff /= empty then
+      taddle ("Missing required arguments: " <> show diff)
+    else
+      validationDoubleLoop
+        plusplus
+        altalt
+        validateArgumentAgainstArgumentDefinition
+        a
+        ad
+
+validateSelectionAgainstFieldDefinition ∷ List AST.T_FieldDefinition → AST.Selection → AST.T_FieldDefinition → ValStackReq
+validateSelectionAgainstFieldDefinition incomingFD (AST.Selection_Field (AST.Field f)) fd =
+  if (f.name /= fd.name) then
+    taddle $ "Incorrect field name: expecting " <> fd.name <> " but received " <> f.name
   else
     ( do
         dive fd.name
-        validateValueAgainstType v fd.type
-    )-}
-    
-validateSelectionSetAgainstFieldDefinitions ∷ AST.SelectionSet → List AST.T_FieldDefinition → ValStack
-validateSelectionSetAgainstFieldDefinitions (AST.SelectionSet ss) fd =
-  foldl
-    (<+>)
-    oooook
-    ( map
-        ( \kv →
-            foldl
-              (<:>)
-              (taddle $ "Could not find a match for kv pair: " <> show kv <> "\n")
-              ( map (validateSelectionAgainstFieldDefinition kv) fd
-              )
-        )
-        ss
+        validateArgumentsAgainstArgumentsDefinition f.arguments fd.argumentsDefinition
+        validateFieldAgainstType f fd.type
     )
-{-
-mutation foobar {} -- actually a query
 
-  = { operationType ∷ OperationType, name ∷ (Maybe String), variableDefinitions ∷ (Maybe VariableDefinitions), directives ∷ (Maybe Directives), selectionSet ∷ SelectionSet }
+validateSelectionAgainstFieldDefinition incomingFD (AST.Selection_FragmentSpread (AST.FragmentSpread fs)) fd = do
+  v <- ask
+  maybe
+    (taddle $ "Could not find fragment with name " <> fs.fragmentName)
+    ((flip validateSelectionSetAgainstFieldDefinitions incomingFD) <<< _.selectionSet <<< unwrap)
+    (head $ filter ((==) fs.fragmentName <<< _.fragmentName <<< unwrap) v.fragmentDefinitions)
 
-data OperationDefinition = OperationDefinition_SelectionSet x  |  OperationDefinition_SelectionSet x y z
+validateSelectionAgainstFieldDefinition incomingFD (AST.Selection_InlineFragment (AST.InlineFragment ilf)) fd = validateSelectionSetAgainstFieldDefinitions ilf.selectionSet incomingFD
 
-data FooBar = Foo String
-  | Bar Int String
-
-doSomethingOnFoobar :: FooBar -> Boolean
-doSomethingOnFoobar (Foo s) = doSomethingOnFoobar (Bar 42 s)
-doSomethingOnFoobar (Bar i s) = s == "hello"
-
-data Maybe a = Nothing | Just a
-
-isJust :: forall a. Maybe a -> Boolean
-isJust (Just _) = true
-isJust Nothing = false
-
-doSomethingOnFoobar (Foo "hello")
--- true
--}
+validateSelectionSetAgainstFieldDefinitions ∷ AST.SelectionSet → List AST.T_FieldDefinition → ValStackReq
+validateSelectionSetAgainstFieldDefinitions (AST.SelectionSet ss) fd =
+  validationDoubleLoop
+    plusplus
+    altalt
+    (validateSelectionAgainstFieldDefinition fd)
+    ss
+    fd
 
 validateExecutableDefinitionAgainstSchema ∷ AST.OperationDefinition → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
-validateExecutableDefinitionAgainstSchema (AST.OperationDefinition_SelectionSet ss) doc = validateExecutableDefinitionAgainstSchema (AST.OperationDefinition_OperationType { operationType: AST.Query, name: Nothing, variableDefinitions: Nothing, directives: Nothing, selectionSet: ss })
+validateExecutableDefinitionAgainstSchema (AST.OperationDefinition_SelectionSet ss) doc = validateExecutableDefinitionAgainstSchema (AST.OperationDefinition_OperationType { operationType: AST.Query, name: Nothing, variableDefinitions: Nothing, directives: Nothing, selectionSet: ss }) doc
+
 validateExecutableDefinitionAgainstSchema (AST.OperationDefinition_OperationType ot) doc =
   maybe (pure unit) throwError
     $ fromList
-        ( unwrap
-            ( runReaderT
-                ( execWriterT
-                    ( evalStateT
-                        ( validateSelectionSetAgainstFieldDefinitions ot.selectionSet (case ot.operationType of
-                          AST.Query → getAllQueryDefinitions doc
-                          AST.Mutation → getAllMutationDefinitions doc
-                          AST.Subscription → getAllSubscriptionDefinitions doc
-                          )
-                        )
-                        Nil
-                    )
+        ( uw
+            ( validateSelectionSetAgainstFieldDefinitions ot.selectionSet
+                ( case ot.operationType of
+                    AST.Query → getAllQueryDefinitions doc
+                    AST.Mutation → getAllMutationDefinitions doc
+                    AST.Subscription → getAllSubscriptionDefinitions doc
                 )
-                { typeDefinitions: (L.toListOf lensToTypeDefinitions doc) }
             )
+            { typeDefinitions: (L.toListOf lensToTypeDefinitions doc), fragmentDefinitions: (L.toListOf lensToFragmentDefinitions doc) }
+            Nil
         )
-    

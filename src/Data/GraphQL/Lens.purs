@@ -22,6 +22,13 @@ lensToTypeSystemDefinitions =
     <<< L.traversed
     <<< down AST._Definition_TypeSystemDefinition
 
+lensToFragmentDefinitions ∷ ∀ o. Choice o ⇒ Wander o ⇒ o AST.FragmentDefinition AST.FragmentDefinition -> o AST.Document AST.Document
+lensToFragmentDefinitions =
+  down AST._Document
+    <<< L.traversed
+    <<< down AST._Definition_ExecutableDefinition
+    <<< down AST._ExecutableDefinition_FragmentDefinition
+
 lensToTypeDefinitions ∷ ∀ o. Choice o ⇒ Wander o ⇒ o AST.TypeDefinition AST.TypeDefinition → o AST.Document AST.Document
 lensToTypeDefinitions =
   lensToTypeSystemDefinitions

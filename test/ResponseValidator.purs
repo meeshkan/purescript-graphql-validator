@@ -1,7 +1,7 @@
-module Test.Validator where
+module Test.ResponseValidator where
 
 import Prelude
-import Data.GraphQL.Validator (validateJSONStringAgainstSchemaAsString')
+import Data.GraphQL.ResponseValidator (validateJSONStringAgainstSchemaAsString')
 import Effect.Aff (Aff)
 import Effect.Class (liftEffect)
 import Test.Spec (SpecT, describe, it)
