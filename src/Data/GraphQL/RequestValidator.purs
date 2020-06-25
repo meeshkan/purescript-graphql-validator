@@ -1,4 +1,11 @@
-module Data.GraphQL.RequestValidator where
+module Data.GraphQL.RequestValidator
+  ( validateOperationDefinitionAgainstSchema
+  , validateOperationDefinitionAsStringAgainstSchema
+  , validate_x_againstSchemaAsString
+  , validateOperationDefinitionAgainstSchemaAsString
+  , validateOperationDefinitionStringAgainstSchemaAsString
+  , validateOperationDefinitionStringAgainstSchemaAsString'
+  ) where
 
 import Prelude
 import Control.Monad.Except (Except, runExceptT, throwError)

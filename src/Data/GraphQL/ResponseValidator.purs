@@ -1,4 +1,14 @@
-module Data.GraphQL.ResponseValidator where
+module Data.GraphQL.ResponseValidator
+  ( validateJSONAgainstSchema'
+  , validateJSONAgainstSchema
+  , validateJSONAsStringAgainstSchema
+  , validate_x_againstSchemaAsString
+  , validateJSONAgainstSchemaAsString
+  , validateJSONStringAgainstSchemaAsString
+  , validateJSONStringAgainstSchemaAsString'
+  , JSON(..)
+  , JMap(..)
+  ) where
 
 import Prelude
 import Control.Alt ((<|>))
