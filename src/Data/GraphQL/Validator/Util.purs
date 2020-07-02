@@ -17,7 +17,7 @@ type GraphQLReqEnv
 type GraphQLResEnv
   = GraphQLReqEnv
 
-type ValStack' r
+type ValStack'' r a
   = StateT
       -- where we are in the path
       (List String)
@@ -30,7 +30,10 @@ type ValStack' r
               Identity
           )
       )
-      Unit
+      a
+
+type ValStack' r
+  = ValStack'' r Unit
 
 type ValStackRes
   = ValStack' GraphQLResEnv

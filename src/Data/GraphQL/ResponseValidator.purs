@@ -18,15 +18,16 @@ import Control.Monad.State (evalStateT)
 import Control.Monad.Writer (execWriterT)
 import Data.Array as A
 import Data.Either (Either, either)
+import Data.Foldable (fold)
 import Data.Generic.Rep (class Generic)
 import Data.Generic.Rep.Eq (genericEq)
 import Data.Generic.Rep.Show (genericShow)
 import Data.GraphQL.AST as AST
 import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, getAllSubscriptionDefinitions, lensToFragmentDefinitions, lensToTypeDefinitions)
 import Data.GraphQL.Parser (document, ignoreMe, operationDefinition)
-import Data.GraphQL.Validator.Util (GraphQLResEnv, ValStackRes, altalt', dive, oooook, plusplus', taddle, topLevelError, validateAsEnum, validateAsScalar, validationDoubleLoop)
+import Data.GraphQL.Validator.Util (GraphQLResEnv, ValStackRes, ValStack'', altalt', dive, oooook, plusplus', taddle, topLevelError, validateAsEnum, validateAsScalar, validationDoubleLoop)
 import Data.Lens as L
-import Data.List (List(..), fromFoldable, singleton, (:))
+import Data.List (List(..), filter, fromFoldable, head, singleton, (:))
 import Data.List.NonEmpty (NonEmptyList, fromList)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), maybe)
@@ -221,6 +222,33 @@ validateFieldDefinitionsAgainstJSONObject (JObject (JMap j)) fd =
     fd
 
 validateFieldDefinitionsAgainstJSONObject _ fd = taddle "Cannot validate field definitions against anything other than an object"
+
+selectionToFields ∷ AST.Selection → ValStack'' GraphQLResEnv (List AST.Field)
+selectionToFields (AST.Selection_Field f) = pure $ singleton f
+
+selectionToFields (AST.Selection_InlineFragment (AST.InlineFragment { selectionSet: (AST.SelectionSet ss) })) = do
+  o ← sequence $ map selectionToFields ss
+  pure $ fold o
+
+selectionToFields (AST.Selection_FragmentSpread (AST.FragmentSpread fs)) = do
+  v ← ask
+  let
+    def = head (filter ((==) fs.fragmentName <<< _.fragmentName <<< unwrap) v.fragmentDefinitions)
+  maybe
+    ( do
+        taddle $ "Could not find fragment with name " <> fs.fragmentName
+        pure Nil
+    )
+    ( \foundDef → do
+        o ← (sequence <<< map selectionToFields <<< unwrap <<< _.selectionSet <<< unwrap) foundDef
+        pure $ fold o
+    )
+    def
+
+selectionsToFields ∷ List AST.Selection → ValStack'' GraphQLResEnv (List AST.Field)
+selectionsToFields i = do
+  s2f ← sequence $ map selectionToFields i
+  pure $ fold s2f
 
 decodeToJSON ∷ String → Either (NonEmptyList ForeignError) JSON
 decodeToJSON = readJSON
