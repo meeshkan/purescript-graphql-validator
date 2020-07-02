@@ -80,7 +80,7 @@ testResponseValidator =
     it "should work on complex query" do
       liftEffect (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_name\":\"Smutz\",\"tweets\":null,\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" "query { Tweet { id Author { first_name last_name tweets avatar_url}}}" schema `shouldReturn` unit)
     it "should work on triple-nested query" do
-      liftEffect (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_name\":\"Smutz\",\"tweets\":[{\"id\":\"42\"}],\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" "query { Tweet { id Author { first_name last_name tweets avatar_url}}}" schema `shouldReturn` unit)
+      liftEffect (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_name\":\"Smutz\",\"tweets\":[{\"id\":\"42\"}],\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" "query { Tweet { id Author { first_name last_name tweets { id } avatar_url}}}" schema `shouldReturn` unit)
     it "should fail when operation type is incorrect" do
       liftEffect $ expectError (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_name\":\"Smutz\",\"tweets\":[{\"id\":\"42\"}],\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" "mutation { Tweet { id Author { first_name last_name tweets avatar_url}}}" schema)
     it "should fail on complex query" do

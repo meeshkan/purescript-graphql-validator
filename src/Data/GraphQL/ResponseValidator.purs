@@ -27,10 +27,10 @@ import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, get
 import Data.GraphQL.Parser (document, ignoreMe, operationDefinition)
 import Data.GraphQL.Validator.Util (GraphQLResEnv, ValStackRes, ValStack'', altalt', dive, oooook, plusplus', taddle, topLevelError, validateAsEnum, validateAsScalar, validationDoubleLoop)
 import Data.Lens as L
-import Data.List (List(..), filter, fromFoldable, head, singleton, (:))
+import Data.List (List(..), length, filter, fromFoldable, head, singleton, (:))
 import Data.List.NonEmpty (NonEmptyList, fromList)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), maybe)
+import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Newtype (unwrap)
 import Data.Nullable (Nullable, null)
 import Data.Traversable (sequence)
@@ -108,120 +108,128 @@ instance writeForeignJSON ∷ WriteForeign JSON where
 instance eqJSON ∷ Eq JSON where
   eq a b = genericEq a b
 
-validateArrayAsListType ∷ List JSON → AST.Type → ValStackRes
-validateArrayAsListType l t = do
+validateArrayAsListType ∷ Maybe (AST.SelectionSet) → List JSON → AST.Type → ValStackRes
+validateArrayAsListType mss l t = do
   dive "*"
-  void $ sequence (map (flip validateValueAgainstType t) l)
+  void $ sequence (map (\j → validateValueAgainstType mss j t) l)
 
-validateAsObjectAgainstUnionDefinition ∷ Map.Map String JSON → List AST.NamedType → ValStackRes
-validateAsObjectAgainstUnionDefinition m Nil = taddle $ "Validated " <> show m <> " against a union definition, but couldn't find a valid type to match against"
+validateAsObjectAgainstUnionDefinition ∷ Maybe (AST.SelectionSet) → Map.Map String JSON → List AST.NamedType → ValStackRes
+validateAsObjectAgainstUnionDefinition mss m Nil = taddle $ "Validated " <> show m <> " against a union definition, but couldn't find a valid type to match against"
 
-validateAsObjectAgainstUnionDefinition m (x : xs) =
+validateAsObjectAgainstUnionDefinition mss m (x : xs) =
   validateValueAgainstType
+    mss
     (JObject (JMap m))
     (AST.Type_NamedType x)
     `altalt`
-      validateAsObjectAgainstUnionDefinition m xs
+      validateAsObjectAgainstUnionDefinition mss m xs
 
-validateAsObjectAgainstInterfaceOrObjectDefinition ∷ Map.Map String JSON → List AST.FieldDefinition → ValStackRes
-validateAsObjectAgainstInterfaceOrObjectDefinition m id = validateFieldDefinitionsAgainstJSONObject (JObject (JMap m)) (map unwrap id)
+validateAsObjectAgainstInterfaceOrObjectDefinition ∷ Maybe (AST.SelectionSet) → Map.Map String JSON → List AST.FieldDefinition → ValStackRes
+validateAsObjectAgainstInterfaceOrObjectDefinition mss m id = validateFieldDefinitionsAgainstJSONObject (JObject (JMap m)) (maybe Nil (\(AST.SelectionSet ls) → ls) mss) (map unwrap id)
 
-validateAsObjectFromTDs ∷ Map.Map String JSON → List AST.TypeDefinition → ValStackRes
-validateAsObjectFromTDs m Nil = taddle "Incoming type is an object, but no type corresponds to it"
+validateAsObjectFromTDs ∷ Maybe (AST.SelectionSet) → Map.Map String JSON → List AST.TypeDefinition → ValStackRes
+validateAsObjectFromTDs mss m Nil = taddle "Incoming type is an object, but no type corresponds to it"
 
-validateAsObjectFromTDs m ((AST.TypeDefinition_UnionTypeDefinition (AST.UnionTypeDefinition ({ unionMemberTypes: Just (AST.UnionMemberTypes x) }))) : xs) =
-  validateAsObjectAgainstUnionDefinition m x
+validateAsObjectFromTDs mss m ((AST.TypeDefinition_UnionTypeDefinition (AST.UnionTypeDefinition ({ unionMemberTypes: Just (AST.UnionMemberTypes x) }))) : xs) =
+  validateAsObjectAgainstUnionDefinition mss m x
     `altalt`
-      validateAsObjectFromTDs m xs
+      validateAsObjectFromTDs mss m xs
 
-validateAsObjectFromTDs m ((AST.TypeDefinition_InterfaceTypeDefinition (AST.InterfaceTypeDefinition ({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) =
-  validateAsObjectAgainstInterfaceOrObjectDefinition m x
+validateAsObjectFromTDs mss m ((AST.TypeDefinition_InterfaceTypeDefinition (AST.InterfaceTypeDefinition ({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) =
+  validateAsObjectAgainstInterfaceOrObjectDefinition mss m x
     `altalt`
-      validateAsObjectFromTDs m xs
+      validateAsObjectFromTDs mss m xs
 
-validateAsObjectFromTDs m ((AST.TypeDefinition_ObjectTypeDefinition (AST.ObjectTypeDefinition ({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) =
-  validateAsObjectAgainstInterfaceOrObjectDefinition m x
+validateAsObjectFromTDs mss m ((AST.TypeDefinition_ObjectTypeDefinition (AST.ObjectTypeDefinition ({ fieldsDefinition: Just (AST.FieldsDefinition x) }))) : xs) =
+  validateAsObjectAgainstInterfaceOrObjectDefinition mss m x
     `altalt`
-      validateAsObjectFromTDs m xs
+      validateAsObjectFromTDs mss m xs
 
-validateAsObjectFromTDs m (_ : xs) = validateAsObjectFromTDs m xs
+validateAsObjectFromTDs mss m (_ : xs) = validateAsObjectFromTDs mss m xs
 
-validateAsObject ∷ Map.Map String JSON → String → ValStackRes
-validateAsObject o nt = do
+validateAsObject ∷ Maybe AST.SelectionSet → Map.Map String JSON → String → ValStackRes
+validateAsObject mss o nt = do
   v ← ask
-  validateAsObjectFromTDs o v.typeDefinitions
+  validateAsObjectFromTDs mss o v.typeDefinitions
 
-validateValueAgainstType ∷ JSON → AST.Type → ValStackRes
-validateValueAgainstType JNull (AST.Type_ListType _) = oooook
+validateValueAgainstType ∷ Maybe AST.SelectionSet → JSON → AST.Type → ValStackRes
+validateValueAgainstType _ JNull (AST.Type_ListType _) = oooook
 
-validateValueAgainstType JNull (AST.Type_NamedType _) = oooook
+validateValueAgainstType _ JNull (AST.Type_NamedType _) = oooook
 
-validateValueAgainstType JNull (AST.Type_NonNullType _) = taddle "Type is non-null in definition but null in JSON"
+validateValueAgainstType _ JNull (AST.Type_NonNullType _) = taddle "Type is non-null in definition but null in JSON"
 
-validateValueAgainstType (JNumber _) (AST.Type_NamedType (AST.NamedType "Int")) = oooook
+validateValueAgainstType _ (JNumber _) (AST.Type_NamedType (AST.NamedType "Int")) = oooook
 
-validateValueAgainstType (JNumber _) (AST.Type_NamedType (AST.NamedType "Float")) = oooook
+validateValueAgainstType _ (JNumber _) (AST.Type_NamedType (AST.NamedType "Float")) = oooook
 
-validateValueAgainstType (JNumber _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "Int"))) = oooook
+validateValueAgainstType _ (JNumber _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "Int"))) = oooook
 
-validateValueAgainstType (JNumber _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "Float"))) = oooook
+validateValueAgainstType _ (JNumber _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "Float"))) = oooook
 
-validateValueAgainstType (JNumber _) t = taddle $ "Got a number but type is " <> show t
+validateValueAgainstType _ (JNumber _) t = taddle $ "Got a number but type is " <> show t
 
-validateValueAgainstType (JString _) (AST.Type_NamedType (AST.NamedType "String")) = oooook
+validateValueAgainstType _ (JString _) (AST.Type_NamedType (AST.NamedType "String")) = oooook
 
-validateValueAgainstType (JString _) (AST.Type_NamedType (AST.NamedType "ID")) = oooook
+validateValueAgainstType _ (JString _) (AST.Type_NamedType (AST.NamedType "ID")) = oooook
 
-validateValueAgainstType (JString s) (AST.Type_NamedType (AST.NamedType nt)) =
+validateValueAgainstType _ (JString s) (AST.Type_NamedType (AST.NamedType nt)) =
   validateAsEnum s nt
     `altalt`
       validateAsScalar s nt
 
-validateValueAgainstType (JString _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "String"))) = oooook
+validateValueAgainstType _ (JString _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "String"))) = oooook
 
-validateValueAgainstType (JString _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "ID"))) = oooook
+validateValueAgainstType _ (JString _) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType "ID"))) = oooook
 
-validateValueAgainstType (JString s) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType nt))) =
+validateValueAgainstType _ (JString s) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType nt))) =
   validateAsEnum s nt
     `altalt`
       validateAsScalar s nt
 
-validateValueAgainstType (JString _) t = taddle $ "Got a string but type is " <> show t
+validateValueAgainstType _ (JString _) t = taddle $ "Got a string but type is " <> show t
 
-validateValueAgainstType (JBoolean _) (AST.Type_NamedType (AST.NamedType "Boolean")) = oooook
+validateValueAgainstType _ (JBoolean _) (AST.Type_NamedType (AST.NamedType "Boolean")) = oooook
 
-validateValueAgainstType (JBoolean _) t = taddle $ "Got a boolean but type is " <> show t
+validateValueAgainstType _ (JBoolean _) t = taddle $ "Got a boolean but type is " <> show t
 
-validateValueAgainstType (JArray a) (AST.Type_ListType (AST.ListType t)) = validateArrayAsListType a t
+validateValueAgainstType mss (JArray a) (AST.Type_ListType (AST.ListType t)) = validateArrayAsListType mss a t
 
-validateValueAgainstType (JArray a) (AST.Type_NonNullType (AST.NonNullType_ListType (AST.ListType t))) = validateArrayAsListType a t
+validateValueAgainstType mss (JArray a) (AST.Type_NonNullType (AST.NonNullType_ListType (AST.ListType t))) = validateArrayAsListType mss a t
 
-validateValueAgainstType (JArray _) t = taddle $ "Got an array but type is " <> show t
+validateValueAgainstType _ (JArray _) t = taddle $ "Got an array but type is " <> show t
 
-validateValueAgainstType (JObject (JMap o)) (AST.Type_NamedType (AST.NamedType nt)) = validateAsObject o nt
+validateValueAgainstType mss (JObject (JMap o)) (AST.Type_NamedType (AST.NamedType nt)) = validateAsObject mss o nt
 
-validateValueAgainstType (JObject (JMap o)) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType nt))) = validateAsObject o nt
+validateValueAgainstType mss (JObject (JMap o)) (AST.Type_NonNullType (AST.NonNullType_NamedType (AST.NamedType nt))) = validateAsObject mss o nt
 
-validateValueAgainstType (JObject _) t = taddle $ "Got an object but type is " <> show t
+validateValueAgainstType _ (JObject _) t = taddle $ "Got an object but type is " <> show t
 
-validateKVPairAgainstFieldDefinition ∷ Tuple String JSON → AST.T_FieldDefinition → ValStackRes
-validateKVPairAgainstFieldDefinition (Tuple k v) fd =
-  if (k /= fd.name) then
-    taddle $ "Incorrect field name: expecting " <> fd.name <> " but received " <> k
-  else do
-    dive fd.name
-    validateValueAgainstType v fd.type
+validateKVPairAgainstFieldDefinition ∷ List AST.Selection → Tuple String JSON → AST.T_FieldDefinition → ValStackRes
+validateKVPairAgainstFieldDefinition ss (Tuple k v) fd = do
+  fds ← selectionsToFields ss
+  let
+    field = head (filter (\(AST.Field f) → (==) k (fromMaybe f.name f.alias)) fds)
+  maybe (taddle $ "Could not find matching field for name " <> k <> " on selection names " <> show (map (\(AST.Field f) -> f.name) fds))
+    ( \(AST.Field realField) →
+        if (realField.name /= fd.name) then
+          taddle $ "Incorrect field name: expecting " <> fd.name <> " but received " <> k
+        else do
+          dive fd.name
+          validateValueAgainstType realField.selectionSet v fd.type
+    )
+    field
 
-validateFieldDefinitionsAgainstJSONObject ∷ JSON → List AST.T_FieldDefinition → ValStackRes
-validateFieldDefinitionsAgainstJSONObject (JObject (JMap j)) fd =
+validateFieldDefinitionsAgainstJSONObject ∷ JSON → List AST.Selection → List AST.T_FieldDefinition → ValStackRes
+validateFieldDefinitionsAgainstJSONObject (JObject (JMap j)) ss fd =
   validationDoubleLoop
     plusplus
     altalt
-    validateKVPairAgainstFieldDefinition
+    (validateKVPairAgainstFieldDefinition ss)
     ((Map.toUnfoldable j) ∷ (List (Tuple String JSON)))
     fd
 
-validateFieldDefinitionsAgainstJSONObject _ fd = taddle "Cannot validate field definitions against anything other than an object"
+validateFieldDefinitionsAgainstJSONObject _ _ _ = taddle "Cannot validate field definitions against anything other than an object"
 
 selectionToFields ∷ AST.Selection → ValStack'' GraphQLResEnv (List AST.Field)
 selectionToFields (AST.Selection_Field f) = pure $ singleton f
@@ -260,6 +268,7 @@ validateJSONAgainstSchema'' json ss fdlist doc =
         ( uw
             ( validateFieldDefinitionsAgainstJSONObject
                 json
+                ss
                 fdlist
             )
             { typeDefinitions: (L.toListOf lensToTypeDefinitions doc), fragmentDefinitions: (L.toListOf lensToFragmentDefinitions doc) }
