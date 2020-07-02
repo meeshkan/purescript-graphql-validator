@@ -22,7 +22,7 @@ import Data.Generic.Rep (class Generic)
 import Data.Generic.Rep.Eq (genericEq)
 import Data.Generic.Rep.Show (genericShow)
 import Data.GraphQL.AST as AST
-import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, lensToFragmentDefinitions, lensToTypeDefinitions)
+import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, getAllSubscriptionDefinitions, lensToFragmentDefinitions, lensToTypeDefinitions)
 import Data.GraphQL.Parser (document, ignoreMe, operationDefinition)
 import Data.GraphQL.Validator.Util (GraphQLResEnv, ValStackRes, altalt', dive, oooook, plusplus', taddle, topLevelError, validateAsEnum, validateAsScalar, validationDoubleLoop)
 import Data.Lens as L
@@ -225,20 +225,27 @@ validateFieldDefinitionsAgainstJSONObject _ fd = taddle "Cannot validate field d
 decodeToJSON ∷ String → Either (NonEmptyList ForeignError) JSON
 decodeToJSON = readJSON
 
-validateJSONAgainstSchema' ∷ JSON → AST.OperationDefinition → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
-validateJSONAgainstSchema' json opdef doc =
+validateJSONAgainstSchema'' ∷ JSON → List AST.Selection → List AST.T_FieldDefinition → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateJSONAgainstSchema'' json ss fdlist doc =
   maybe (pure unit) throwError
     $ fromList
         ( uw
             ( validateFieldDefinitionsAgainstJSONObject
                 json
-                (getAllQueryDefinitions doc)
-                `altalt`
-                  validateFieldDefinitionsAgainstJSONObject json (getAllMutationDefinitions doc)
+                fdlist
             )
             { typeDefinitions: (L.toListOf lensToTypeDefinitions doc), fragmentDefinitions: (L.toListOf lensToFragmentDefinitions doc) }
             Nil
         )
+
+validateJSONAgainstSchema' ∷ JSON → AST.OperationDefinition → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateJSONAgainstSchema' json (AST.OperationDefinition_SelectionSet (AST.SelectionSet ss)) doc = validateJSONAgainstSchema'' json ss (getAllQueryDefinitions doc) doc
+
+validateJSONAgainstSchema' json (AST.OperationDefinition_OperationType { operationType: AST.Query, selectionSet: (AST.SelectionSet ss) }) doc = validateJSONAgainstSchema'' json ss (getAllQueryDefinitions doc) doc
+
+validateJSONAgainstSchema' json (AST.OperationDefinition_OperationType { operationType: AST.Mutation, selectionSet: (AST.SelectionSet ss) }) doc = validateJSONAgainstSchema'' json ss (getAllMutationDefinitions doc) doc
+
+validateJSONAgainstSchema' json (AST.OperationDefinition_OperationType { operationType: AST.Subscription, selectionSet: (AST.SelectionSet ss) }) doc = validateJSONAgainstSchema'' json ss (getAllSubscriptionDefinitions doc) doc
 
 validateJSONAgainstSchema ∷ JSON → AST.OperationDefinition → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
 validateJSONAgainstSchema (JObject (JMap m)) o d =
