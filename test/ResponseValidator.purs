@@ -1,7 +1,7 @@
 module Test.ResponseValidator where
 
 import Prelude
-import Data.GraphQL.ResponseValidator (validateJSONStringAgainstSchemaAsString')
+import Data.GraphQL.ResponseValidator (validateJSONStringAndOperationDefStringAgainstSchemaAsString')
 import Effect.Aff (Aff)
 import Effect.Class (liftEffect)
 import Test.Spec (SpecT, describe, it)
@@ -73,15 +73,15 @@ testResponseValidator ∷ ∀ m. Monad m ⇒ SpecT Aff Unit m Unit
 testResponseValidator =
   describe "test full spec" do
     it "should work on simple query" do
-      liftEffect (validateJSONStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\"}}}" schema `shouldReturn` unit)
-      liftEffect (validateJSONStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{}}}" schema `shouldReturn` unit)
+      liftEffect (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\"}}}" "query { Tweet { id } }" schema `shouldReturn` unit)
+      liftEffect (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{}}}" "query { Tweet {  } }" schema `shouldReturn` unit)
     it "should fail on simple query" do
-      liftEffect $ expectError (validateJSONStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":1}}}" schema)
+      liftEffect $ expectError (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":1}}}" "query { Tweet { id } }" schema)
     it "should work on complex query" do
-      liftEffect (validateJSONStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_name\":\"Smutz\",\"tweets\":null,\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" schema `shouldReturn` unit)
+      liftEffect (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_name\":\"Smutz\",\"tweets\":null,\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" "query { Tweet { id Author { first_name last_name tweets avatar_url}}}" schema `shouldReturn` unit)
     it "should work on triple-nested query" do
-      liftEffect (validateJSONStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_name\":\"Smutz\",\"tweets\":[{\"id\":\"42\"}],\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" schema `shouldReturn` unit)
+      liftEffect (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_name\":\"Smutz\",\"tweets\":[{\"id\":\"42\"}],\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" "query { Tweet { id Author { first_name last_name tweets avatar_url}}}" schema `shouldReturn` unit)
     it "should fail on complex query" do
-      liftEffect $ expectError (validateJSONStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":true}}}}" schema)
+      liftEffect $ expectError (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":true}}}}" "query { Tweet { id Author { first_name }}}" schema)
     it "should fail on triple-nested query" do
-      liftEffect $ expectError (validateJSONStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_name\":\"Smutz\",\"tweets\":[{\"id\":42}],\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" schema)
+      liftEffect $ expectError (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_name\":\"Smutz\",\"tweets\":[{\"id\":42}],\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" "query { Tweet { id Author { first_name last_name tweets avatar_url}}}" schema)

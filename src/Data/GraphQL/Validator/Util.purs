@@ -11,11 +11,11 @@ import Data.List (List(..), (:), length, singleton)
 import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple(..))
 
-type GraphQLResEnv
-  = { typeDefinitions ∷ List AST.TypeDefinition }
-
 type GraphQLReqEnv
   = { fragmentDefinitions ∷ List AST.FragmentDefinition, typeDefinitions ∷ List AST.TypeDefinition }
+
+type GraphQLResEnv
+  = GraphQLReqEnv
 
 type ValStack' r
   = StateT

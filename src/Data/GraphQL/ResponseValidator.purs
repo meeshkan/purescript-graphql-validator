@@ -5,7 +5,7 @@ module Data.GraphQL.ResponseValidator
   , validate_x_againstSchemaAsString
   , validateJSONAgainstSchemaAsString
   , validateJSONStringAgainstSchemaAsString
-  , validateJSONStringAgainstSchemaAsString'
+  , validateJSONStringAndOperationDefStringAgainstSchemaAsString'
   , JSON(..)
   , JMap(..)
   ) where
@@ -22,8 +22,8 @@ import Data.Generic.Rep (class Generic)
 import Data.Generic.Rep.Eq (genericEq)
 import Data.Generic.Rep.Show (genericShow)
 import Data.GraphQL.AST as AST
-import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, lensToTypeDefinitions)
-import Data.GraphQL.Parser (document)
+import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, lensToFragmentDefinitions, lensToTypeDefinitions)
+import Data.GraphQL.Parser (document, ignoreMe, operationDefinition)
 import Data.GraphQL.Validator.Util (GraphQLResEnv, ValStackRes, altalt', dive, oooook, plusplus', taddle, topLevelError, validateAsEnum, validateAsScalar, validationDoubleLoop)
 import Data.Lens as L
 import Data.List (List(..), fromFoldable, singleton, (:))
@@ -225,8 +225,8 @@ validateFieldDefinitionsAgainstJSONObject _ fd = taddle "Cannot validate field d
 decodeToJSON ∷ String → Either (NonEmptyList ForeignError) JSON
 decodeToJSON = readJSON
 
-validateJSONAgainstSchema' ∷ JSON → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
-validateJSONAgainstSchema' json doc =
+validateJSONAgainstSchema' ∷ JSON → AST.OperationDefinition → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateJSONAgainstSchema' json opdef doc =
   maybe (pure unit) throwError
     $ fromList
         ( uw
@@ -236,42 +236,47 @@ validateJSONAgainstSchema' json doc =
                 `altalt`
                   validateFieldDefinitionsAgainstJSONObject json (getAllMutationDefinitions doc)
             )
-            { typeDefinitions: (L.toListOf lensToTypeDefinitions doc) }
+            { typeDefinitions: (L.toListOf lensToTypeDefinitions doc), fragmentDefinitions: (L.toListOf lensToFragmentDefinitions doc) }
             Nil
         )
 
-validateJSONAgainstSchema ∷ JSON → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
-validateJSONAgainstSchema (JObject (JMap m)) d =
+validateJSONAgainstSchema ∷ JSON → AST.OperationDefinition → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateJSONAgainstSchema (JObject (JMap m)) o d =
   maybe
     (throwError $ pure topLevelError)
-    (flip validateJSONAgainstSchema' d)
+    (\j → validateJSONAgainstSchema' j o d)
     (Map.lookup "data" m)
 
-validateJSONAgainstSchema _ _ = throwError $ pure topLevelError
+validateJSONAgainstSchema _ _ _ = throwError $ pure topLevelError
 
-validateJSONAsStringAgainstSchema ∷ String → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
-validateJSONAsStringAgainstSchema s d =
+validateJSONAsStringAgainstSchema ∷ String → AST.OperationDefinition → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateJSONAsStringAgainstSchema s o d =
   either
     (throwError <<< pure <<< Tuple (singleton "[JSON parser]") <<< show)
-    (flip validateJSONAgainstSchema d)
+    (\j → validateJSONAgainstSchema j o d)
     (decodeToJSON s)
 
-validate_x_againstSchemaAsString ∷ ∀ x. (x → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit) → x → String → Except (NonEmptyList (Tuple (List String) String)) Unit
-validate_x_againstSchemaAsString x s d =
+validate_x_againstSchemaAsString ∷ ∀ x. (x → AST.OperationDefinition → AST.Document → Except (NonEmptyList (Tuple (List String) String)) Unit) → x → String → String → Except (NonEmptyList (Tuple (List String) String)) Unit
+validate_x_againstSchemaAsString x s o d =
   either
     (throwError <<< pure <<< Tuple (singleton "[Schema parser]") <<< show)
-    (x s)
+    ( \doc →
+        either
+          (throwError <<< pure <<< Tuple (singleton "[Opdef parser]") <<< show)
+          (\opdef → x s opdef doc)
+          (runParser o (ignoreMe *> operationDefinition))
+    )
     (runParser d document)
 
-validateJSONAgainstSchemaAsString ∷ JSON → String → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateJSONAgainstSchemaAsString ∷ JSON → String → String → Except (NonEmptyList (Tuple (List String) String)) Unit
 validateJSONAgainstSchemaAsString = validate_x_againstSchemaAsString validateJSONAgainstSchema
 
-validateJSONStringAgainstSchemaAsString ∷ String → String → Except (NonEmptyList (Tuple (List String) String)) Unit
+validateJSONStringAgainstSchemaAsString ∷ String → String → String → Except (NonEmptyList (Tuple (List String) String)) Unit
 validateJSONStringAgainstSchemaAsString = validate_x_againstSchemaAsString validateJSONAsStringAgainstSchema
 
-validateJSONStringAgainstSchemaAsString' ∷ String → String → Effect Unit
-validateJSONStringAgainstSchemaAsString' a b =
+validateJSONStringAndOperationDefStringAgainstSchemaAsString' ∷ String → String → String → Effect Unit
+validateJSONStringAndOperationDefStringAgainstSchemaAsString' json opdef schema =
   either
     (throwError <<< error <<< show)
     pure
-    (unwrap $ runExceptT (validateJSONStringAgainstSchemaAsString a b))
+    (unwrap $ runExceptT (validateJSONStringAgainstSchemaAsString json opdef schema))
