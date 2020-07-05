@@ -71,7 +71,7 @@ type Mutation {
 
 testRequestValidator ∷ ∀ m. Monad m ⇒ SpecT Aff Unit m Unit
 testRequestValidator =
-  describe "test full spec" do
+  describe "test request validator" do
     it "should work on simple query" do
       liftEffect (validateOperationDefinitionStringAgainstSchemaAsString' "{}" schema `shouldReturn` unit)
       liftEffect (validateOperationDefinitionStringAgainstSchemaAsString' "query{}" schema `shouldReturn` unit)

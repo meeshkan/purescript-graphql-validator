@@ -71,7 +71,7 @@ type Mutation {
 
 testResponseValidator ∷ ∀ m. Monad m ⇒ SpecT Aff Unit m Unit
 testResponseValidator =
-  describe "test full spec" do
+  describe "test response validator" do
     it "should work on simple query" do
       liftEffect (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\"}}}" "query { Tweet { id } }" schema `shouldReturn` unit)
       liftEffect (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{}}}" "query { Tweet {  } }" schema `shouldReturn` unit)
@@ -85,6 +85,8 @@ testResponseValidator =
       liftEffect (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_naaame\":\"Smutz\",\"tweets\":null,\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" "           query \n{ Tweet { id Author { first_name last_naaame: last_name tweets avatar_url}}}" schema `shouldReturn` unit)
     it "should fail on complex query with incorrect aliases" do
       liftEffect $ expectError (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_naaame\":\"Smutz\",\"tweets\":null,\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" "           query \n{ Tweet { id Author { first_name last_naaaame: last_name tweets avatar_url}}}" schema)
+    it "should fail on complex query with incorrect aliases 2" do
+      liftEffect $ expectError (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"last_naaame\":\"Smutz\"}}}}" "#\nquery \n{ Tweet { id Author { last_naaaame: last_name  }}}" schema)
     it "should work on triple-nested query" do
       liftEffect (validateJSONStringAndOperationDefStringAgainstSchemaAsString' "{\"data\":{\"Tweet\":{\"id\":\"a\",\"Author\":{\"first_name\":\"Makenna\",\"last_name\":\"Smutz\",\"tweets\":[{\"id\":\"42\"}],\"avatar_url\":\"https://github.com/KenzoBenzo/avatar\"}}}}" "query { Tweet { id Author { first_name last_name tweets { id } avatar_url}}}" schema `shouldReturn` unit)
     it "should fail when operation type is incorrect" do

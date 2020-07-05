@@ -1,13 +1,12 @@
 module Data.GraphQL.Validator.Util where
 
 import Prelude
-import Data.Foldable (foldl)
 import Control.Monad.Reader (class MonadAsk, ReaderT, ask)
+import Control.Monad.Rec.Class (class MonadRec, Step(..), tailRecM)
 import Control.Monad.State (class MonadState, StateT, get, put)
-import Control.Monad.Writer (class MonadTell, WriterT, tell)
 import Data.GraphQL.AST as AST
 import Data.Identity (Identity)
-import Data.List (List(..), (:), length, singleton)
+import Data.List (List(..), (:), singleton, length)
 import Data.Maybe (Maybe(..))
 import Data.Tuple (Tuple(..))
 
@@ -21,19 +20,15 @@ type ValStack'' r a
   = StateT
       -- where we are in the path
       (List String)
-      ( WriterT
-          -- errors
-          (List (Tuple (List String) String))
-          ( ReaderT
-              -- info about the document
-              r
-              Identity
-          )
+      ( ReaderT
+          -- info about the document
+          r
+          Identity
       )
       a
 
 type ValStack' r
-  = ValStack'' r Unit
+  = ValStack'' r (List (Tuple (List String) String))
 
 type ValStackRes
   = ValStack' GraphQLResEnv
@@ -41,49 +36,35 @@ type ValStackRes
 type ValStackReq
   = ValStack' GraphQLReqEnv
 
-oooook ∷ ∀ m. Monad m ⇒ m Unit
-oooook = pure unit
+oooook ∷ ∀ a m. Monad m ⇒ m (List a)
+oooook = pure Nil
 
-not'oooook ∷ ∀ a m. MonadTell (List (Tuple a String)) m ⇒ List (Tuple a String) → m Unit
-not'oooook l = do
-  tell l
-  oooook
-
-taddle ∷ ∀ a m. MonadTell (List (Tuple a String)) m ⇒ MonadState a m ⇒ String → m Unit
+taddle ∷ ∀ a m. MonadState a m ⇒ String → m (List (Tuple a String))
 taddle msg = do
   whereWeAre ← get
-  tell $ singleton (Tuple whereWeAre msg)
-  oooook
+  pure $ singleton (Tuple whereWeAre msg)
 
 dive ∷ ∀ m. MonadState (List String) m ⇒ String → m Unit
 dive segment = do
   whereWeAre ← get
   put $ whereWeAre <> (singleton segment)
-  oooook
 
 --     _a = unwrap (runReaderT (execWriterT (evalStateT a whereWeAre)) env)
 -- if both go to shit, we want to have the errors for both
-altalt' ∷
-  ∀ a r m.
-  MonadTell (List (Tuple a String)) m ⇒
-  MonadState a m ⇒
-  MonadAsk r m ⇒
-  (m Unit → r → a → (List (Tuple a String))) →
-  m Unit →
-  m Unit →
-  m Unit
-altalt' uw a b = do
-  whereWeAre ← get
-  env ← ask
-  let
-    _a = uw a env whereWeAre
+altalt ∷
+  ∀ a m.
+  Monad m ⇒
+  m (List (Tuple a String)) →
+  m (List (Tuple a String)) →
+  m (List (Tuple a String))
+altalt a b = do
+  _a ← a
   if length _a == 0 then
-    oooook
+    pure Nil
   else
-    ( let
-        _b = uw b env whereWeAre
-      in
-        if length _b == 0 then oooook else not'oooook $ _a <> _b
+    ( do
+        _b ← b
+        if length _b == 0 then pure Nil else pure $ _a <> _b
     )
 
 isInEnumValuesDefinition ∷ String → List AST.EnumValueDefinition → Boolean
@@ -113,10 +94,9 @@ validateAsEnum ∷
   ∀ a r m.
   MonadAsk { typeDefinitions ∷ List AST.TypeDefinition | r } m ⇒
   MonadState a m ⇒
-  MonadTell (List (Tuple a String)) m ⇒
   String →
   String →
-  m Unit
+  m (List (Tuple a String))
 validateAsEnum js nt = do
   v ← ask
   if isEnum js v.typeDefinitions then
@@ -135,10 +115,9 @@ validateAsScalar ∷
   ∀ a r m.
   MonadAsk { typeDefinitions ∷ List AST.TypeDefinition | r } m ⇒
   MonadState a m ⇒
-  MonadTell (List (Tuple a String)) m ⇒
   String →
   String →
-  m Unit
+  m (List (Tuple a String))
 validateAsScalar js nt = do
   v ← ask
   if (isScalar js v.typeDefinitions) then
@@ -146,48 +125,76 @@ validateAsScalar js nt = do
   else
     taddle "Value is not a valid scalar type in the document"
 
-plusplus' ∷
-  ∀ a r m.
-  MonadTell (List (Tuple a String)) m ⇒
+type ValStep y a m
+  = m (Step { acc ∷ List (Tuple a String), l ∷ List y } (List (Tuple a String)))
+
+validationInnerLoop ∷
+  ∀ y a m.
   MonadState a m ⇒
-  MonadAsk r m ⇒
-  (m Unit → r → a → (List (Tuple a String))) →
-  m Unit →
-  m Unit →
-  m Unit
-plusplus' uw a b = do
-  whereWeAre ← get
-  env ← ask
-  let
-    _a = uw a env whereWeAre
-  let
-    _b = uw b env whereWeAre
-  if length _b == 0 && length _a == 0 then oooook else not'oooook $ _a <> _b
+  MonadRec m ⇒
+  List (Tuple a String) →
+  (y → m (List (Tuple a String))) →
+  List y →
+  m (List (Tuple a String))
+validationInnerLoop i f l1 = tailRecM go { acc: i, l: l1 }
+  where
+  go ∷ { acc ∷ List (Tuple a String), l ∷ List y } → ValStep y a m
+  go { acc, l: Nil } = pure $ Done acc
+
+  go { acc, l: (x : xs) } = do
+    r ← f x
+    proc r acc xs
+
+  proc ∷
+    List (Tuple a String) →
+    List (Tuple a String) →
+    List y →
+    ValStep y a m
+  proc Nil _ _ = pure $ Done Nil
+
+  proc _ Nil _ = pure $ Done Nil
+
+  proc a b l = pure $ Loop { acc: a <> b, l }
 
 validationDoubleLoop ∷
-  ∀ x y a r m.
+  ∀ x y a m.
   Show x ⇒
-  MonadTell (List (Tuple a String)) m ⇒
   MonadState a m ⇒
-  MonadAsk r m ⇒
-  (m Unit → m Unit → m Unit) →
-  (m Unit → m Unit → m Unit) →
-  (x → y → m Unit) →
-  List x → List y → m Unit
-validationDoubleLoop pp aa f l0 l1 =
-  foldl
-    pp
-    oooook
-    ( map
-        ( \kv →
-            foldl
-              aa
-              (taddle $ "Could not find a match for kv pair: " <> show kv <> "\n")
-              ( map (f kv) l1
-              )
-        )
-        l0
-    )
+  MonadRec m ⇒
+  (x → y → m (List (Tuple a String))) →
+  List x →
+  List y →
+  m (List (Tuple a String))
+validationDoubleLoop f l0 l1 = tailRecM go { acc: Nil, l: l0 }
+  where
+  go ∷ { acc ∷ List (Tuple a String), l ∷ List x } → ValStep x a m
+  go { acc, l: Nil } = pure $ Done acc
+
+  go { acc, l: (x : xs) } = do
+    whereWeAre ← get
+    vl ←
+      validationInnerLoop
+        (singleton (Tuple whereWeAre $ "Could not find a match for kv pair: " <> show x <> "\n"))
+        (f x)
+        l1
+    pure $ Loop { acc: vl <> acc, l: xs }
+
+validationOuterLoop ∷
+  ∀ x a m.
+  Show x ⇒
+  MonadState a m ⇒
+  MonadRec m ⇒
+  (x → m (List (Tuple a String))) →
+  List x →
+  m (List (Tuple a String))
+validationOuterLoop f l0 = tailRecM go { acc: Nil, l: l0 }
+  where
+  go ∷ { acc ∷ List (Tuple a String), l ∷ List x } → ValStep x a m
+  go { acc, l: Nil } = pure $ Done acc
+
+  go { acc, l: (x : xs) } = do
+    vl ← f x
+    pure $ Loop { acc: vl <> acc, l: xs }
 
 topLevelError =
   Tuple

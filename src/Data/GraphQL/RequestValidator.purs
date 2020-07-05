@@ -11,12 +11,11 @@ import Prelude
 import Control.Monad.Except (Except, runExceptT, throwError)
 import Control.Monad.Reader (ask, runReaderT)
 import Control.Monad.State (evalStateT)
-import Control.Monad.Writer (execWriterT)
 import Data.Either (Either, either)
 import Data.GraphQL.AST as AST
 import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, getAllSubscriptionDefinitions, lensToFragmentDefinitions, lensToTypeDefinitions)
 import Data.GraphQL.Parser as GP
-import Data.GraphQL.Validator.Util (GraphQLReqEnv, ValStackReq, altalt', dive, oooook, plusplus', taddle, validateAsEnum, validateAsScalar, validationDoubleLoop)
+import Data.GraphQL.Validator.Util (GraphQLReqEnv, ValStackReq, altalt, dive, oooook, taddle, validateAsEnum, validateAsScalar, validationDoubleLoop, validationOuterLoop)
 import Data.Lens as L
 import Data.List (List(..), singleton, length, filter, (:), head)
 import Data.List.NonEmpty (fromList)
@@ -24,25 +23,18 @@ import Data.List.Types (NonEmptyList)
 import Data.Maybe (maybe, Maybe(..))
 import Data.Newtype (unwrap)
 import Data.Set (fromFoldable, empty, difference)
-import Data.Traversable (sequence)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Exception (error)
 import Text.Parsing.Parser (ParseError, runParser)
 
 uw ∷ ValStackReq → GraphQLReqEnv → (List String) → List (Tuple (List String) String)
-uw a env s = unwrap (runReaderT (execWriterT (evalStateT a s)) env)
-
-altalt ∷ ValStackReq → ValStackReq → ValStackReq
-altalt = altalt' uw
-
-plusplus ∷ ValStackReq → ValStackReq → ValStackReq
-plusplus = plusplus' uw
+uw a env s = unwrap (runReaderT (evalStateT a s) env)
 
 validateListValueAsListType ∷ List AST.Value → AST.Type → ValStackReq
 validateListValueAsListType l t = do
   dive "*"
-  void $ sequence (map (flip validateValueAgainstType t) l)
+  validationOuterLoop (flip validateValueAgainstType t) l
 
 validateAsObjectAgainstInputObjectDefinition ∷ List AST.Argument → List AST.InputValueDefinition → ValStackReq
 validateAsObjectAgainstInputObjectDefinition a ad = validateArgumentsAgainstArgumentsDefinition (Just (AST.Arguments a)) (Just (AST.ArgumentsDefinition ad))
@@ -125,10 +117,7 @@ validateNameCorrespondsToSimpleType t = case t of
   "ID" → oooook
   "String" → oooook
   "Boolean" → oooook
-  s →
-    validateAsEnum s t
-      `altalt`
-        validateAsScalar s t
+  s → validateAsEnum s t `altalt` validateAsScalar s t
 
 validateUnderlyingTypeIsNotObject ∷ AST.Type → ValStackReq
 validateUnderlyingTypeIsNotObject (AST.Type_NamedType (AST.NamedType t)) = validateNameCorrespondsToSimpleType t
@@ -235,8 +224,6 @@ validateArgumentsAgainstArgumentsDefinition (Just (AST.Arguments a)) (Just (AST.
       taddle ("Missing required arguments: " <> show diff)
     else
       validationDoubleLoop
-        plusplus
-        altalt
         validateArgumentAgainstArgumentDefinition
         a
         ad
@@ -248,8 +235,9 @@ validateSelectionAgainstFieldDefinition incomingFD (AST.Selection_Field (AST.Fie
   else
     ( do
         dive fd.name
-        validateArgumentsAgainstArgumentsDefinition f.arguments fd.argumentsDefinition
-        validateFieldAgainstType f fd.type
+        ( (<>) <$> validateArgumentsAgainstArgumentsDefinition f.arguments fd.argumentsDefinition
+            <*> validateFieldAgainstType f fd.type
+        )
     )
 
 validateSelectionAgainstFieldDefinition incomingFD (AST.Selection_FragmentSpread (AST.FragmentSpread fs)) fd = do
@@ -264,8 +252,6 @@ validateSelectionAgainstFieldDefinition incomingFD (AST.Selection_InlineFragment
 validateSelectionSetAgainstFieldDefinitions ∷ AST.SelectionSet → List AST.T_FieldDefinition → ValStackReq
 validateSelectionSetAgainstFieldDefinitions (AST.SelectionSet ss) fd =
   validationDoubleLoop
-    plusplus
-    altalt
     (validateSelectionAgainstFieldDefinition fd)
     ss
     fd

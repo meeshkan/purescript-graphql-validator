@@ -15,7 +15,6 @@ import Control.Alt ((<|>))
 import Control.Monad.Except (Except, runExceptT, throwError)
 import Control.Monad.Reader (ask, runReaderT)
 import Control.Monad.State (evalStateT)
-import Control.Monad.Writer (execWriterT)
 import Data.Array as A
 import Data.Either (Either, either)
 import Data.Foldable (fold)
@@ -25,9 +24,9 @@ import Data.Generic.Rep.Show (genericShow)
 import Data.GraphQL.AST as AST
 import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, getAllSubscriptionDefinitions, lensToFragmentDefinitions, lensToTypeDefinitions)
 import Data.GraphQL.Parser (document, ignoreMe, operationDefinition)
-import Data.GraphQL.Validator.Util (GraphQLResEnv, ValStackRes, ValStack'', altalt', dive, oooook, plusplus', taddle, topLevelError, validateAsEnum, validateAsScalar, validationDoubleLoop)
+import Data.GraphQL.Validator.Util (GraphQLResEnv, ValStack'', ValStackRes, altalt, dive, oooook, taddle, topLevelError, validateAsEnum, validateAsScalar, validationDoubleLoop, validationOuterLoop)
 import Data.Lens as L
-import Data.List (List(..), length, filter, fromFoldable, head, singleton, (:))
+import Data.List (List(..), filter, fromFoldable, head, singleton, (:))
 import Data.List.NonEmpty (NonEmptyList, fromList)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
@@ -43,13 +42,7 @@ import Simple.JSON (class ReadForeign, class WriteForeign, readImpl, readJSON, w
 import Text.Parsing.Parser (runParser)
 
 uw ∷ ValStackRes → GraphQLResEnv → (List String) → List (Tuple (List String) String)
-uw a env s = unwrap (runReaderT (execWriterT (evalStateT a s)) env)
-
-altalt ∷ ValStackRes → ValStackRes → ValStackRes
-altalt = altalt' uw
-
-plusplus ∷ ValStackRes → ValStackRes → ValStackRes
-plusplus = plusplus' uw
+uw a env s = unwrap (runReaderT (evalStateT a s) env)
 
 newtype JMap
   = JMap (Map.Map String JSON)
@@ -111,7 +104,7 @@ instance eqJSON ∷ Eq JSON where
 validateArrayAsListType ∷ Maybe (AST.SelectionSet) → List JSON → AST.Type → ValStackRes
 validateArrayAsListType mss l t = do
   dive "*"
-  void $ sequence (map (\j → validateValueAgainstType mss j t) l)
+  validationOuterLoop (\j → validateValueAgainstType mss j t) l
 
 validateAsObjectAgainstUnionDefinition ∷ Maybe (AST.SelectionSet) → Map.Map String JSON → List AST.NamedType → ValStackRes
 validateAsObjectAgainstUnionDefinition mss m Nil = taddle $ "Validated " <> show m <> " against a union definition, but couldn't find a valid type to match against"
@@ -223,8 +216,6 @@ validateKVPairAgainstFieldDefinition ss (Tuple k v) fd = do
 validateFieldDefinitionsAgainstJSONObject ∷ JSON → List AST.Selection → List AST.T_FieldDefinition → ValStackRes
 validateFieldDefinitionsAgainstJSONObject (JObject (JMap j)) ss fd =
   validationDoubleLoop
-    plusplus
-    altalt
     (validateKVPairAgainstFieldDefinition ss)
     ((Map.toUnfoldable j) ∷ (List (Tuple String JSON)))
     fd
@@ -243,10 +234,7 @@ selectionToFields (AST.Selection_FragmentSpread (AST.FragmentSpread fs)) = do
   let
     def = head (filter ((==) fs.fragmentName <<< _.fragmentName <<< unwrap) v.fragmentDefinitions)
   maybe
-    ( do
-        taddle $ "Could not find fragment with name " <> fs.fragmentName
-        pure Nil
-    )
+    (pure Nil) -- todo, add ::: taddle $ "Could not find fragment with name " <> fs.fragmentName
     ( \foundDef → do
         o ← (sequence <<< map selectionToFields <<< unwrap <<< _.selectionSet <<< unwrap) foundDef
         pure $ fold o
