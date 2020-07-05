@@ -6,8 +6,9 @@ import Control.Monad.Rec.Class (class MonadRec, Step(..), tailRecM)
 import Control.Monad.State (class MonadState, StateT, get, put)
 import Data.GraphQL.AST as AST
 import Data.Identity (Identity)
-import Data.List (List(..), (:), singleton, length)
+import Data.List (List(..), fold, length, singleton, (:))
 import Data.Maybe (Maybe(..))
+import Data.Traversable (sequence)
 import Data.Tuple (Tuple(..))
 
 type GraphQLReqEnv
@@ -128,6 +129,9 @@ validateAsScalar js nt = do
 type ValStep y a m
   = m (Step { acc ∷ List (Tuple a String), l ∷ List y } (List (Tuple a String)))
 
+-- We use tail recursion here to terminate on a successful validation
+-- Otherwise, we'd have to terminate early during a monadic fold, which
+-- requires hairy logic. Writing it out as tail recursion is cleaner.
 validationInnerLoop ∷
   ∀ y a m.
   MonadState a m ⇒
@@ -165,36 +169,19 @@ validationDoubleLoop ∷
   List x →
   List y →
   m (List (Tuple a String))
-validationDoubleLoop f l0 l1 = tailRecM go { acc: Nil, l: l0 }
-  where
-  go ∷ { acc ∷ List (Tuple a String), l ∷ List x } → ValStep x a m
-  go { acc, l: Nil } = pure $ Done acc
-
-  go { acc, l: (x : xs) } = do
-    whereWeAre ← get
-    vl ←
-      validationInnerLoop
-        (singleton (Tuple whereWeAre $ "Could not find a match for kv pair: " <> show x <> "\n"))
-        (f x)
-        l1
-    pure $ Loop { acc: vl <> acc, l: xs }
-
-validationOuterLoop ∷
-  ∀ x a m.
-  Show x ⇒
-  MonadState a m ⇒
-  MonadRec m ⇒
-  (x → m (List (Tuple a String))) →
-  List x →
-  m (List (Tuple a String))
-validationOuterLoop f l0 = tailRecM go { acc: Nil, l: l0 }
-  where
-  go ∷ { acc ∷ List (Tuple a String), l ∷ List x } → ValStep x a m
-  go { acc, l: Nil } = pure $ Done acc
-
-  go { acc, l: (x : xs) } = do
-    vl ← f x
-    pure $ Loop { acc: vl <> acc, l: xs }
+validationDoubleLoop f l0 l1 = do
+  whereWeAre ← get
+  fold
+    <$> ( sequence
+          $ map
+              ( \x →
+                  validationInnerLoop
+                    (singleton (Tuple whereWeAre $ "Could not find a match for kv pair: " <> show x <> "\n"))
+                    (f x)
+                    l1
+              )
+              l0
+      )
 
 topLevelError =
   Tuple

@@ -12,10 +12,11 @@ import Control.Monad.Except (Except, runExceptT, throwError)
 import Control.Monad.Reader (ask, runReaderT)
 import Control.Monad.State (evalStateT)
 import Data.Either (Either, either)
+import Data.Foldable (fold)
 import Data.GraphQL.AST as AST
 import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, getAllSubscriptionDefinitions, lensToFragmentDefinitions, lensToTypeDefinitions)
 import Data.GraphQL.Parser as GP
-import Data.GraphQL.Validator.Util (GraphQLReqEnv, ValStackReq, altalt, dive, oooook, taddle, validateAsEnum, validateAsScalar, validationDoubleLoop, validationOuterLoop)
+import Data.GraphQL.Validator.Util (GraphQLReqEnv, ValStackReq, altalt, dive, oooook, taddle, validateAsEnum, validateAsScalar, validationDoubleLoop)
 import Data.Lens as L
 import Data.List (List(..), singleton, length, filter, (:), head)
 import Data.List.NonEmpty (fromList)
@@ -23,6 +24,7 @@ import Data.List.Types (NonEmptyList)
 import Data.Maybe (maybe, Maybe(..))
 import Data.Newtype (unwrap)
 import Data.Set (fromFoldable, empty, difference)
+import Data.Traversable (sequence)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Exception (error)
@@ -34,7 +36,7 @@ uw a env s = unwrap (runReaderT (evalStateT a s) env)
 validateListValueAsListType ∷ List AST.Value → AST.Type → ValStackReq
 validateListValueAsListType l t = do
   dive "*"
-  validationOuterLoop (flip validateValueAgainstType t) l
+  fold <$> (sequence $ map (flip validateValueAgainstType t) l)
 
 validateAsObjectAgainstInputObjectDefinition ∷ List AST.Argument → List AST.InputValueDefinition → ValStackReq
 validateAsObjectAgainstInputObjectDefinition a ad = validateArgumentsAgainstArgumentsDefinition (Just (AST.Arguments a)) (Just (AST.ArgumentsDefinition ad))

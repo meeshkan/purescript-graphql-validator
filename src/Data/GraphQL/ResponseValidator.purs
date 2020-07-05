@@ -24,7 +24,7 @@ import Data.Generic.Rep.Show (genericShow)
 import Data.GraphQL.AST as AST
 import Data.GraphQL.Lens (getAllMutationDefinitions, getAllQueryDefinitions, getAllSubscriptionDefinitions, lensToFragmentDefinitions, lensToTypeDefinitions)
 import Data.GraphQL.Parser (document, ignoreMe, operationDefinition)
-import Data.GraphQL.Validator.Util (GraphQLResEnv, ValStack'', ValStackRes, altalt, dive, oooook, taddle, topLevelError, validateAsEnum, validateAsScalar, validationDoubleLoop, validationOuterLoop)
+import Data.GraphQL.Validator.Util (GraphQLResEnv, ValStack'', ValStackRes, altalt, dive, oooook, taddle, topLevelError, validateAsEnum, validateAsScalar, validationDoubleLoop)
 import Data.Lens as L
 import Data.List (List(..), filter, fromFoldable, head, singleton, (:))
 import Data.List.NonEmpty (NonEmptyList, fromList)
@@ -104,7 +104,7 @@ instance eqJSON ∷ Eq JSON where
 validateArrayAsListType ∷ Maybe (AST.SelectionSet) → List JSON → AST.Type → ValStackRes
 validateArrayAsListType mss l t = do
   dive "*"
-  validationOuterLoop (\j → validateValueAgainstType mss j t) l
+  fold <$> (sequence $ map (\j → validateValueAgainstType mss j t) l)
 
 validateAsObjectAgainstUnionDefinition ∷ Maybe (AST.SelectionSet) → Map.Map String JSON → List AST.NamedType → ValStackRes
 validateAsObjectAgainstUnionDefinition mss m Nil = taddle $ "Validated " <> show m <> " against a union definition, but couldn't find a valid type to match against"
@@ -242,9 +242,7 @@ selectionToFields (AST.Selection_FragmentSpread (AST.FragmentSpread fs)) = do
     def
 
 selectionsToFields ∷ List AST.Selection → ValStack'' GraphQLResEnv (List AST.Field)
-selectionsToFields i = do
-  s2f ← sequence $ map selectionToFields i
-  pure $ fold s2f
+selectionsToFields i = fold <$> (sequence $ map selectionToFields i)
 
 decodeToJSON ∷ String → Either (NonEmptyList ForeignError) JSON
 decodeToJSON = readJSON
