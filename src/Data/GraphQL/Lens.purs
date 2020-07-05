@@ -2,7 +2,6 @@ module Data.GraphQL.Lens where
 
 import Prelude
 import Data.GraphQL.AST as AST
-import Data.Lens (class Wander)
 import Data.Lens as L
 import Data.Lens.Record as LR
 import Data.List (List, length, concat)
@@ -14,31 +13,31 @@ import Data.Tuple (Tuple, uncurry)
 down ∷ ∀ a b o. Tuple (a → b) (b → Maybe a) → (Choice o ⇒ o a a → o b b)
 down = uncurry L.prism'
 
-lensToTypeSystemDefinitions ∷ ∀ o. Choice o ⇒ Wander o ⇒ o AST.TypeSystemDefinition AST.TypeSystemDefinition -> o AST.Document AST.Document
+lensToTypeSystemDefinitions ∷ ∀ o. Choice o ⇒ L.Wander o ⇒ o AST.TypeSystemDefinition AST.TypeSystemDefinition -> o AST.Document AST.Document
 lensToTypeSystemDefinitions =
   down AST._Document
     <<< L.traversed
     <<< down AST._Definition_TypeSystemDefinition
 
-lensToFragmentDefinitions ∷ ∀ o. Choice o ⇒ Wander o ⇒ o AST.FragmentDefinition AST.FragmentDefinition -> o AST.Document AST.Document
+lensToFragmentDefinitions ∷ ∀ o. Choice o ⇒ L.Wander o ⇒ o AST.FragmentDefinition AST.FragmentDefinition -> o AST.Document AST.Document
 lensToFragmentDefinitions =
   down AST._Document
     <<< L.traversed
     <<< down AST._Definition_ExecutableDefinition
     <<< down AST._ExecutableDefinition_FragmentDefinition
 
-lensToTypeDefinitions ∷ ∀ o. Choice o ⇒ Wander o ⇒ o AST.TypeDefinition AST.TypeDefinition → o AST.Document AST.Document
+lensToTypeDefinitions ∷ ∀ o. Choice o ⇒ L.Wander o ⇒ o AST.TypeDefinition AST.TypeDefinition → o AST.Document AST.Document
 lensToTypeDefinitions =
   lensToTypeSystemDefinitions
     <<< down AST._TypeSystemDefinition_TypeDefinition
 
-lensToObjectTypeDefinitions ∷ ∀ o. Choice o ⇒ Wander o ⇒ o AST.T_ObjectTypeDefinition AST.T_ObjectTypeDefinition → o AST.Document AST.Document
+lensToObjectTypeDefinitions ∷ ∀ o. Choice o ⇒ L.Wander o ⇒ o AST.T_ObjectTypeDefinition AST.T_ObjectTypeDefinition → o AST.Document AST.Document
 lensToObjectTypeDefinitions =
   lensToTypeDefinitions
     <<< down AST._TypeDefinition_ObjectTypeDefinition
     <<< down AST._ObjectTypeDefinition
 
-lensToNamedFieldDefinitions ∷ ∀ o. Choice o ⇒ Wander o ⇒ String → o AST.T_FieldDefinition AST.T_FieldDefinition → o AST.Document AST.Document
+lensToNamedFieldDefinitions ∷ ∀ o. Choice o ⇒ L.Wander o ⇒ String → o AST.T_FieldDefinition AST.T_FieldDefinition → o AST.Document AST.Document
 lensToNamedFieldDefinitions name =
   lensToObjectTypeDefinitions
     <<< L.filtered (eq name <<< _.name)
@@ -48,13 +47,13 @@ lensToNamedFieldDefinitions name =
     <<< L.traversed
     <<< down AST._FieldDefinition
 
-lensToSchemaDefinitions ∷ ∀ o. Choice o ⇒ Wander o ⇒ o AST.T_SchemaDefinition AST.T_SchemaDefinition → o AST.Document AST.Document
+lensToSchemaDefinitions ∷ ∀ o. Choice o ⇒ L.Wander o ⇒ o AST.T_SchemaDefinition AST.T_SchemaDefinition → o AST.Document AST.Document
 lensToSchemaDefinitions =
   lensToTypeSystemDefinitions
     <<< down AST._TypeSystemDefinition_SchemaDefinition
     <<< down AST._SchemaDefinition
 
-lensToNamedRootOperationTypeDefinitions ∷ ∀ o. Choice o ⇒ Wander o ⇒ AST.OperationType → o AST.T_RootOperationTypeDefinition AST.T_RootOperationTypeDefinition → o AST.Document AST.Document
+lensToNamedRootOperationTypeDefinitions ∷ ∀ o. Choice o ⇒ L.Wander o ⇒ AST.OperationType → o AST.T_RootOperationTypeDefinition AST.T_RootOperationTypeDefinition → o AST.Document AST.Document
 lensToNamedRootOperationTypeDefinitions operationType =
   lensToSchemaDefinitions
     <<< LR.prop (SProxy ∷ SProxy "rootOperationTypeDefinition")
